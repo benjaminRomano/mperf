@@ -1,4 +1,4 @@
-# mobile-perf
+# mperf
 **Options**
 
 | Name(s) | Metavar | Description |

@@ -72,7 +72,8 @@ object DocsGenerator {
         }
 
         fun render(cmd: BaseCliktCommand<*>): String {
-            val title = cmd.commandName.ifBlank { "mperf" }
+            // Ensure stable root title regardless of Clikt's inferred command name
+            val title = if (cmd.currentContext.parent == null) "mperf" else cmd.commandName
             val sb = StringBuilder()
             sb.append("# ").append(title).append('\n')
 
