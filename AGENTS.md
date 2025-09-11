@@ -12,7 +12,7 @@
 - Profilers: `PerfettoProfiler`, `SimpleperfProfiler`, and `MethodProfiler`, orchestrated by `ProfilerExecutorImpl`.
 - Trace Opening: `ProfileOpener` starts a local HTTP server on `127.0.0.1:9001` and opens the appropriate UI (Perfetto or Firefox Profiler) to fetch the file once, then shuts down.
 - Device I/O: thin `Adb` wrapper for shell calls, file pull/push, quoting, and root-aware shells.
-- Config: YAML via `kaml`; values hydrate defaults for CLI options and are stored in `~/.mobileperf/config.yml` (auto-created on first run).
+- Config: YAML via `kaml`; values hydrate defaults for CLI options and are stored in `~/.mperf/config.yml` (auto-created on first run).
 - Proto: Perfetto config defined in `src/main/proto` and compiled to Kotlin/Java.
 
 ## Build, Test, and Development Commands
@@ -42,7 +42,7 @@
 
 - Android: Install Android SDK Platform-Tools; ensure `adb` is on PATH (`adb version`). Enable USB debugging, accept RSA prompt, verify with `adb devices`.
 - Python and tools (Simpleperf flow): Requires `python3`, `tar`, and `gzip` on PATH for converting perf.data to Gecko format and extracting scripts.
-- Network access: May be required to sideload Perfetto (tracebox) and download Simpleperf scripts into `~/.mobileperf/simpleperf/`.
+- Network access: May be required to sideload Perfetto (tracebox) and download Simpleperf scripts into `~/.mperf/simpleperf/`.
 - Desktop opener: Uses `open` (macOS) or `xdg-open` (Linux) to launch browser. Ensure firewall allows `127.0.0.1:9001` for a one-shot file fetch.
 - Port usage: Local HTTP server binds to `127.0.0.1:9001` (chosen for Perfetto UI CSP compatibility).
 
@@ -57,7 +57,7 @@
 - Do not commit secrets or device identifiers. Keep local paths out of code.
 - Android tooling (`adb`, perfetto, simpleperf) is expected to be on PATH when running profilers.
 - JVM 21 is required (managed via Gradle toolchains).
-- Config file lives at `~/.mobileperf/config.yml` and is created with defaults if missing.
+- Config file lives at `~/.mperf/config.yml` and is created with defaults if missing.
 
 ## Usage Notes
 
@@ -77,7 +77,7 @@
 
 - Simpleperf
   - Records with `simpleperf record --app <package>` using customizable args (`--simpleperfArgs`). On rootable devices, sideloads the latest simpleperf binary and sets `--user-buffer-size 1G` to avoid truncated stacks.
-  - Converts `perf.data` to Firefox Profiler (Gecko) JSON using `gecko_profile_generator.py` from scripts auto-installed into `~/.mobileperf/simpleperf/`.
+  - Converts `perf.data` to Firefox Profiler (Gecko) JSON using `gecko_profile_generator.py` from scripts auto-installed into `~/.mperf/simpleperf/`.
   - Options: `--symfs`, `--mapping`, `--show-art-frames/--no-show-art-frames`, `--remove-method` (defaults strip common concurrency noise).
 
 - Method tracing

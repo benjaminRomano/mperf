@@ -37,7 +37,7 @@ data class AndroidConfig(
 )
 
 fun getConfig(): Path =
-    Paths.get(System.getProperty("user.home")).resolve(".mobileperf/config.yml").apply {
+    Paths.get(System.getProperty("user.home")).resolve(".mperf/config.yml").apply {
         parent.toFile().mkdirs()
         if (notExists()) {
             Files.createFile(this).outputStream().use { os ->

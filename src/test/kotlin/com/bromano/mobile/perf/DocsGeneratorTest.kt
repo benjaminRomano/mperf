@@ -28,7 +28,7 @@ class DocsGeneratorTest {
         val md = DocsGenerator.generateCliDocsMarkdown()
 
         // Root title
-        assertTrue(md.startsWith("# mobile-perf"))
+        assertTrue(md.startsWith("# mperf"))
         // Root options section has blank line before the table
         assertContains(md, "**Options**\n\n| Name(s) | Metavar | Description |")
         // Root commands table lists subcommands

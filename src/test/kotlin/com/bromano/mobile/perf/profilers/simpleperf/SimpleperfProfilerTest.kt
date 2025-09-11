@@ -71,7 +71,7 @@ class SimpleperfProfilerTest {
         val tmpHome = Files.createTempDirectory("home")
         originalHome = System.getProperty("user.home")
         System.setProperty("user.home", tmpHome.toString())
-        Files.createDirectories(tmpHome.resolve(".mobileperf/simpleperf"))
+        Files.createDirectories(tmpHome.resolve(".mperf/simpleperf"))
 
         // Build a parsed SimpleperfOptions via a tiny Clikt command
         class OptsCmd : CliktCommand() {
@@ -157,7 +157,7 @@ class SimpleperfProfilerTest {
         val prevHome = System.getProperty("user.home")
         if (originalHome == null) originalHome = prevHome
         System.setProperty("user.home", tmpHome.toString())
-        Files.createDirectories(tmpHome.resolve(".mobileperf/simpleperf"))
+        Files.createDirectories(tmpHome.resolve(".mperf/simpleperf"))
 
         // Build a parsed SimpleperfOptions via a tiny Clikt command
         class OptsCmd2 : CliktCommand() {

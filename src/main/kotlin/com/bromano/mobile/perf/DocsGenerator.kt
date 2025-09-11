@@ -69,7 +69,7 @@ object DocsGenerator {
         }
 
         fun render(cmd: BaseCliktCommand<*>): String {
-            val title = cmd.commandName.ifBlank { "mobileperf" }
+            val title = cmd.commandName.ifBlank { "mperf" }
             val sb = StringBuilder()
             sb.append("# ").append(title).append('\n')
 

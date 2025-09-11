@@ -186,7 +186,7 @@ class SimpleperfProfiler(
      * We need the latest version of simpleperf scripts with the `--remove-method` functionality
      */
     private fun getSimpleperfScripts(): Path {
-        val simpleperfHome = Path.of(System.getProperty("user.home")).resolve(".mobileperf/simpleperf")
+        val simpleperfHome = Path.of(System.getProperty("user.home")).resolve(".mperf/simpleperf")
 
         if (simpleperfHome.exists()) {
             return simpleperfHome

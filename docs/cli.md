@@ -22,7 +22,7 @@
 | --simpleperfArgs | text | Custom options for simpleperf record command |
 | --symfs | path | Directory to find binaries with symbols and debug info [Simpleperf only] |
 | --mapping | path | Mapping file for simpleperf deobfuscation |
-| --no-show-art-frames, --show-art-frames |  | Show art frames in simpleperf firefox profile |
+| --no-show-art-frames, --show-art-frames |  | Show Android Runtime Frames |
 | --remove-method | text | Remove methods matched by provided regexes (e.g. "^io\.reactivex.$" |
 | --out, -o | path | Output path for trace |
 | --package, -p | text | Package name |
@@ -46,7 +46,7 @@
 | --simpleperfArgs | text | Custom options for simpleperf record command |
 | --symfs | path | Directory to find binaries with symbols and debug info [Simpleperf only] |
 | --mapping | path | Mapping file for simpleperf deobfuscation |
-| --no-show-art-frames, --show-art-frames |  | Show art frames in simpleperf firefox profile |
+| --no-show-art-frames, --show-art-frames |  | Show Android Runtime Frames |
 | --remove-method | text | Remove methods matched by provided regexes (e.g. "^io\.reactivex.$" |
 | --help, -h |  | Show this message and exit |
 
