@@ -1,0 +1,3 @@
+# https://github.com/JLLeitschuh/ktlint-gradle/issues/746
+[build/generated/sources/**]
+ktlint = disabled
