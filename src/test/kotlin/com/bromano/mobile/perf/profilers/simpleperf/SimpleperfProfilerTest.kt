@@ -2,10 +2,10 @@ package com.bromano.mobile.perf.profilers.simpleperf
 
 import com.bromano.mobile.perf.SimpleperfOptions
 import com.bromano.mobile.perf.androidProfilerOptions
-import com.github.ajalt.clikt.core.parse
 import com.bromano.mobile.perf.utils.Adb
 import com.bromano.mobile.perf.utils.Shell
 import com.github.ajalt.clikt.core.CliktCommand
+import com.github.ajalt.clikt.core.parse
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test

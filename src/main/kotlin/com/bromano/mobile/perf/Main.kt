@@ -18,6 +18,7 @@ import kotlin.io.path.readText
 
 class MobilePerfCommand : CliktCommand() {
     override fun help(context: Context) = "A CLI for mobile performance testing"
+
     override fun run() = Unit
 }
 

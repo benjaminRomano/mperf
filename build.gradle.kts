@@ -1,5 +1,5 @@
-import com.google.protobuf.gradle.id
 import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
+import com.google.protobuf.gradle.id
 
 plugins {
     kotlin("jvm") version "2.2.20"

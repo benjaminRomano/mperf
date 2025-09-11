@@ -3,10 +3,10 @@ package com.bromano.mobile.perf.commands.android
 import com.bromano.mobile.perf.AndroidConfig
 import com.bromano.mobile.perf.Config
 import com.bromano.mobile.perf.ProfilerOptionGroup
-import com.github.ajalt.clikt.core.parse
 import com.bromano.mobile.perf.profilers.ProfilerExecutor
 import com.bromano.mobile.perf.utils.ProfileViewer
 import com.bromano.mobile.perf.utils.Shell
+import com.github.ajalt.clikt.core.parse
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
 import org.mockito.kotlin.anyOrNull

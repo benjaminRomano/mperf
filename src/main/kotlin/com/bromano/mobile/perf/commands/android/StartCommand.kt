@@ -19,7 +19,7 @@ class StartCommand(
     private val shell: Shell,
     private val config: Config,
     private val executor: ProfilerExecutor,
-    ) : CliktCommand() {
+) : CliktCommand() {
     override fun help(context: Context) = "Run profiler over abitrary app session"
 
     private val profilerOption by androidProfilerOptions()

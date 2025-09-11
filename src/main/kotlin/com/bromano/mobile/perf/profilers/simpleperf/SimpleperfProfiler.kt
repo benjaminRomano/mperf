@@ -5,7 +5,6 @@ import com.bromano.mobile.perf.profilers.Profiler
 import com.bromano.mobile.perf.utils.Adb
 import com.bromano.mobile.perf.utils.Logger
 import com.bromano.mobile.perf.utils.Shell
-import com.github.ajalt.clikt.core.PrintMessage
 import java.io.File
 import java.io.FileOutputStream
 import java.net.URI
@@ -219,7 +218,5 @@ class SimpleperfProfiler(
         instrumentationRunner: String,
         testCase: String,
         output: Path,
-    ) {
-        throw NotImplementedError("Currently unsupported due to Macrobenchmark limitations")
-    }
+    ): Unit = throw NotImplementedError("Currently unsupported due to Macrobenchmark limitations")
 }

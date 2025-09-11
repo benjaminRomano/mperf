@@ -5,14 +5,14 @@ import com.bromano.mobile.perf.commands.android.StartCommand
 import com.bromano.mobile.perf.profilers.ProfilerExecutor
 import com.bromano.mobile.perf.utils.ShellExecutor
 import com.github.ajalt.clikt.core.BaseCliktCommand
-import com.github.ajalt.clikt.core.subcommands
-import com.github.ajalt.clikt.output.MordantMarkdownHelpFormatter
-import com.github.ajalt.clikt.output.HelpFormatter
 import com.github.ajalt.clikt.core.parse
-import kotlin.io.path.readText
+import com.github.ajalt.clikt.core.subcommands
+import com.github.ajalt.clikt.output.HelpFormatter
+import com.github.ajalt.clikt.output.MordantMarkdownHelpFormatter
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import kotlin.io.path.readText
 
 /** Entry point to generate docs to docs/cli.md */
 object DocsGenerator {
@@ -28,7 +28,9 @@ object DocsGenerator {
      */
     fun generateCliDocsMarkdown(): String {
         // Build the CLI tree without performing any side effects
-        val config = com.charleskorn.kaml.Yaml.default.decodeFromString(Config.serializer(), getConfig().readText())
+        val config =
+            com.charleskorn.kaml.Yaml.default
+                .decodeFromString(Config.serializer(), getConfig().readText())
         val shell = ShellExecutor()
         val noop =
             object : ProfilerExecutor {
@@ -53,11 +55,12 @@ object DocsGenerator {
                 ) = Unit
             }
 
-        val root = MobilePerfCommand()
-            .subcommands(
-                StartCommand(shell, config, noop),
-                CollectCommand(shell, config, noop),
-            )
+        val root =
+            MobilePerfCommand()
+                .subcommands(
+                    StartCommand(shell, config, noop),
+                    CollectCommand(shell, config, noop),
+                )
 
         // Switch help formatter to Markdown
         root.configureContext { helpFormatter = { ctx -> MordantMarkdownHelpFormatter(ctx) } }
@@ -91,10 +94,14 @@ object DocsGenerator {
                         val names = (o.names + o.secondaryNames).sorted().joinToString(", ")
                         val mv = o.metavar ?: ""
                         val help = o.help
-                        b.append("| ")
-                            .append(escapePipes(escapeAngleBracketsOutsideCode(names))).append(" | ")
-                            .append(escapePipes(escapeAngleBracketsOutsideCode(mv))).append(" | ")
-                            .append(escapePipes(help)).append(" |\n")
+                        b
+                            .append("| ")
+                            .append(escapePipes(escapeAngleBracketsOutsideCode(names)))
+                            .append(" | ")
+                            .append(escapePipes(escapeAngleBracketsOutsideCode(mv)))
+                            .append(" | ")
+                            .append(escapePipes(help))
+                            .append(" |\n")
                     }
                     b.append('\n')
                 }
@@ -105,8 +112,12 @@ object DocsGenerator {
                     arguments.forEach { a ->
                         val name = a.name
                         val help = a.help
-                        b.append("| ").append(escapePipes(name)).append(" | ")
-                            .append(escapePipes(help)).append(" |\n")
+                        b
+                            .append("| ")
+                            .append(escapePipes(name))
+                            .append(" | ")
+                            .append(escapePipes(help))
+                            .append(" |\n")
                     }
                     b.append('\n')
                 }
@@ -117,8 +128,12 @@ object DocsGenerator {
                     subcommands.forEach { s ->
                         val name = s.name
                         val help = s.help
-                        b.append("| ").append(escapePipes(name)).append(" | ")
-                            .append(escapePipes(help)).append(" |\n")
+                        b
+                            .append("| ")
+                            .append(escapePipes(name))
+                            .append(" | ")
+                            .append(escapePipes(help))
+                            .append(" |\n")
                     }
                     b.append('\n')
                 }
@@ -131,7 +146,10 @@ object DocsGenerator {
             for (sub in cmd.registeredSubcommands()) {
                 sb.append("## ").append(sub.commandName).append('\n')
                 // Ensure sub has a valid context
-                try { sub.resetContext(cmd.currentContext) } catch (_: Exception) {}
+                try {
+                    sub.resetContext(cmd.currentContext)
+                } catch (_: Exception) {
+                }
                 sb.append(renderParamsAsTables(sub))
             }
             return sb.toString()
@@ -183,7 +201,5 @@ object DocsGenerator {
             }
     }
 
-    private fun escapePipes(text: String): String =
-        text.replace("|", "\\|")
+    private fun escapePipes(text: String): String = text.replace("|", "\\|")
 }
-

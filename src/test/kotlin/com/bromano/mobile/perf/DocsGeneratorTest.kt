@@ -58,8 +58,10 @@ class DocsGeneratorTest {
 
         assertContains(md, "## collect")
         assertContains(md, "**Options**\n\n| Name(s) | Metavar | Description |")
-        assertContains(md, "| --instrumentation, -i | text | Instrumentation runner (e.g. com.example.macrobenchmark/androidx.test.runner.AndroidJUnitRunner) |")
+        assertContains(
+            md,
+            "| --instrumentation, -i | text | Instrumentation runner (e.g. com.example.macrobenchmark/androidx.test.runner.AndroidJUnitRunner) |",
+        )
         assertContains(md, "| --test, -t | text | Performance test to run |")
     }
 }
-
