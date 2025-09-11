@@ -96,6 +96,7 @@ class CollectCommand(
             finalInstrumentationRunner,
             finalTestCase,
             finalOutputPath,
+            profileViewerOverride,
         )
     }
 }

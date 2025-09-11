@@ -13,7 +13,8 @@ plugins {
 
 group = "com.bromano"
 
-version = "1.0-SNAPSHOT"
+// Align project version with the release tag when provided
+version = providers.gradleProperty("releaseVersion").getOrElse("1.0-SNAPSHOT")
 
 application { mainClass.set("com.bromano.mobile.perf.MainKt") }
 
@@ -67,6 +68,7 @@ tasks {
         archiveClassifier.set("all")
         manifest {
             attributes["Main-Class"] = "com.bromano.mobile.perf.MainKt"
+            attributes["Implementation-Version"] = project.version
         }
     }
 

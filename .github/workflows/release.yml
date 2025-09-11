@@ -1,0 +1,71 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Build (tests + fat jar)
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: |
+          # Strip leading 'v' from the tag for the module version (e.g., v1.2.3 -> 1.2.3)
+          TAG_NO_V="${RELEASE_VERSION#v}"
+          echo "Building release version: $TAG_NO_V"
+          ./gradlew --no-daemon -PreleaseVersion="$TAG_NO_V" clean test shadowJar
+
+      - name: Locate artifact
+        id: artifact
+        run: |
+          TAG_NO_V="${GITHUB_REF_NAME#v}"
+          # Expect the jar to contain the version in the filename
+          JAR_PATH=$(ls build/libs/*-${TAG_NO_V}-all.jar | head -n1)
+          echo "Found jar: $JAR_PATH"
+          echo "jar=$JAR_PATH" >> $GITHUB_OUTPUT
+
+      - name: Prepare release assets
+        id: prep
+        run: |
+          TAG_NAME="${GITHUB_REF_NAME}"
+          OUT_DIR="dist"
+          mkdir -p "$OUT_DIR"
+          SRC_JAR="${{ steps.artifact.outputs.jar }}"
+          BASENAME=$(basename "$SRC_JAR")
+          cp "$SRC_JAR" "$OUT_DIR/$BASENAME"
+          (cd "$OUT_DIR" && sha256sum "$BASENAME" > "$BASENAME.sha256")
+          echo "assets_dir=$OUT_DIR" >> $GITHUB_OUTPUT
+          echo "asset_jar=$OUT_DIR/$BASENAME" >> $GITHUB_OUTPUT
+          echo "asset_sum=$OUT_DIR/$BASENAME.sha256" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            ${{ steps.prep.outputs.asset_jar }}
+            ${{ steps.prep.outputs.asset_sum }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

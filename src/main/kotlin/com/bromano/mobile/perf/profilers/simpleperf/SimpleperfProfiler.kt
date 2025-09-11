@@ -64,7 +64,7 @@ class SimpleperfProfiler(
 
         val proc = shell.startProcess(simpleperfCommand)
 
-        Logger.info("Press any key to end tracing...")
+        Logger.info("Press Enter to end tracing...")
         awaitStop()
 
         Logger.info("Waiting for simpleperf to shutdown...")
@@ -220,29 +220,6 @@ class SimpleperfProfiler(
         testCase: String,
         output: Path,
     ) {
-        Logger.info("Running performance test: $testCase")
-
-        adb.shell(
-            buildString {
-                append("am instrument -w -r ")
-                append("-e class \"$testCase\" ")
-                // Only perform a single iteration
-                append("-e androidx.benchmark.profiling.mode MethodTracing ")
-                // append("-e androidx.benchmark.profiling.sampleFrequency 4000 ")
-                // Always allow emulators. This won't produce useful performance data but can be heplful for
-                // debugging
-                append("-e androidx.benchmark.suppressErrors \"EMULATOR\" ")
-                append(instrumentationRunner)
-            },
-        )
-
-        Logger.info("Test complete. Pulling trace...")
-
-        val outputDir = adb.getDirUsableByAppAndShell(instrumentationRunner.substringBefore("/"))
-        val trace =
-            adb.ls(outputDir).firstOrNull { it.endsWith(".perfetto-trace") }
-                ?: throw PrintMessage("No simpleperf trace found by instrumentation test in $outputDir", printError = true)
-
-        adb.pull("$outputDir$trace", output.toString())
+        throw NotImplementedError("Currently unsupported due to Macrobenchmark limitations")
     }
 }

@@ -49,7 +49,7 @@ class MethodProfiler(
             adb.shell("am start --start-profiler $onDeviceTrace --streaming \"$resolved\"")
         }
 
-        Logger.info("Press any key to end tracing...")
+        Logger.info("Press Enter to end tracing...")
         awaitStop()
 
         Logger.info("Stopping method tracing...")
