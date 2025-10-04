@@ -1,6 +1,7 @@
 package com.bromano.mobile.perf.gecko
 
 import com.bromano.mobile.perf.utils.Logger
+import com.bromano.mobile.perf.utils.XmlSecurityConfigurator
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
@@ -12,6 +13,7 @@ object InstrumentsConverter {
         input: Path,
         runNum: Int = 1,
     ): GeckoProfile {
+        XmlSecurityConfigurator.configureXMLSecurityProperties()
         val timeProfilerSettings = InstrumentsParser.getInstrumentsSettings(input, runNum)
 
         // xctrace queries can be quite slow so parallelize them with coroutines
