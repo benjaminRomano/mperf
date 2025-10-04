@@ -63,12 +63,12 @@ fun main(args: Array<String>) {
         .subcommands(
             IosCommand().subcommands(
                 IosStartCommand(shell, config, profilerExecutor),
+                ConvertCommand(ProfileOpener(shell)),
             ),
             AndroidCommand().subcommands(
                 AndroidStartCommand(shell, config, profilerExecutor),
                 AndroidCollectCommand(shell, config, profilerExecutor),
             ),
-            ConvertCommand(ProfileOpener(shell)),
         ).main(args)
 }
 
