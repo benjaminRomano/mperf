@@ -118,8 +118,29 @@ exec java -jar "$INSTALL_DIR/mperf-latest.jar" "\$@"
 LAUNCH
 chmod +x "$LAUNCHER"
 
+# Create CLI aliases for platform-specific invocations
+APERF_LAUNCHER="$BIN_DIR/aperf"
+cat > "$APERF_LAUNCHER" <<'APERF'
+#!/usr/bin/env bash
+set -euo pipefail
+DIR="$(cd "$(dirname "$0")" && pwd)"
+exec "$DIR/mperf" android "$@"
+APERF
+chmod +x "$APERF_LAUNCHER"
+
+IPERF_LAUNCHER="$BIN_DIR/iperf"
+cat > "$IPERF_LAUNCHER" <<'IPERF'
+#!/usr/bin/env bash
+set -euo pipefail
+DIR="$(cd "$(dirname "$0")" && pwd)"
+exec "$DIR/mperf" ios "$@"
+IPERF
+chmod +x "$IPERF_LAUNCHER"
+
 echo "Installed mperf to: $TARGET_JAR"
 echo "Launcher created at: $LAUNCHER"
+echo "Android alias created at: $APERF_LAUNCHER"
+echo "iOS alias created at: $IPERF_LAUNCHER"
 
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
@@ -128,4 +149,3 @@ case ":$PATH:" in
 esac
 
 echo "Done. Try: mperf --help"
-

@@ -1,7 +1,7 @@
 # mperf — Mobile Performance CLI
 
-`mperf` is a CLI tool for collecting and visualizing profiler data from Android devices. It provides a unified interface over
-various Android profilers and supports collection over both ad-hoc app sessions and single-iterations of **Macrobenchmark** tests.
+`mperf` is a CLI tool for collecting and visualizing profiler data from Android and iOS devices. It provides a unified interface over
+platform profilers and supports collection over both ad-hoc app sessions and single-iterations of **Macrobenchmark** tests.
 
 ## Features
 
@@ -10,14 +10,16 @@ various Android profilers and supports collection over both ad-hoc app sessions 
 - Android Runtime Method Traces
 - Perfetto
 - Simpleperf
+- Instruments
 
 **Collection Modes**
 
-- Arbitrary app session profiling
-- Single Macrobenchmark iteration profiling
+- Arbitrary app session profiling (Android & iOS)
+- Single Macrobenchmark iteration profiling (Android)
 
 **Visualization**
 
+- Instruments
 - Perfetto UI
 - Firefox Profiler
 
@@ -26,11 +28,12 @@ various Android profilers and supports collection over both ad-hoc app sessions 
 - Java 21+
 - Android SDK Platform‑Tools (`adb` on PATH)
 - `python3`, `tar`, and `gzip` on PATH
+- Xcode Command Line Tools (for iOS Instruments collection)
 - macOS or Linux
 
 ## Install
 
-The CLI can be installed using the installation helper. Once ran `mperf` will be added to the PATH.
+The CLI can be installed using the installation helper. Once ran `mperf`, `aperf`, and `iperf` commands will be added to your PATH.
 
 ```
 curl -fsSL https://raw.githubusercontent.com/benjaminromano/mperf/refs/heads/main/scripts/install.sh | bash
@@ -38,54 +41,67 @@ curl -fsSL https://raw.githubusercontent.com/benjaminromano/mperf/refs/heads/mai
 
 ### Manual Installation
 
-Alternatively, the CLI can be manually downloaded and installed from [GitHub Releases](https://github.com/benjaminromano/mperf/releases).
-
-Add a shell alias or wrapper script named `mperf` that invokes the JAR:
+Alternatively, download the latest JAR from [GitHub Releases](https://github.com/benjaminromano/mperf/releases) and add the following snippet to your POSIX shell profile (for example `~/.zshrc` or `~/.bashrc`). Update `MPERF_JAR` to the location where you stored the download.
 
 ```bash
-# Example alias — update the path to the JAR you downloaded
-alias mperf='java -jar $HOME/tools/mperf/mperf-<version>-all.jar'
+# mperf CLI manual installation
+MPERF_JAR="$HOME/tools/mperf/mperf-<version>-all.jar"
 
-# Verify
-mperf --help
+if [ -f "$MPERF_JAR" ]; then
+  alias mperf="java -jar \"$MPERF_JAR\""
+  alias aperf='mperf android'
+  alias iperf='mperf ios'
+fi
 ```
+
+Reload your shell (`source ~/.zshrc`, `source ~/.bashrc`, etc.) and run `mperf --help` to verify.
 
 ## Quickstart
 
-**Ad‑hoc Perfetto session for an app**
+**Android: ad-hoc Perfetto session for an app**
 
 ```bash
 # Defaults to Perfetto collection
-mperf start -p com.example.app
+aperf start -p com.example.app
 ```
 
-Press any key to stop tracing. When done, the trace will be opened in Perfetto UI.
+Press any key to stop tracing. When done, the trace opens in Perfetto UI by default; use `--ui firefox` or `--ui instruments` (iOS) to pick a different viewer.
 
-**Run a single performance test iteration and pull the trace**
+**Android: run a single performance test iteration and pull the trace**
 
 ```bash
-mperf collect -p com.example.app -i com.example.macrobenchmark/androidx.test.runner.AndroidJUnitRunner -t LoginBenchmark#loginByIntent
+aperf collect -p com.example.app -i com.example.macrobenchmark/androidx.test.runner.AndroidJUnitRunner -t LoginBenchmark#loginByIntent
 ```
 
 **Note:** If you omit the device or instrumentation runner, the CLI lists choices interactively.
+
+**iOS: collect an Instruments session for an app**
+
+```bash
+iperf start -b com.example.app --template "Time Profiler" --ui instruments
+
+```
+
+The trace can be opened directly in Instruments, or exported for Firefox Profiler / Perfetto via the `--ui` flag.
 
 ## Usage
 
 Full usage details can be found in [CLI Reference Docs](/docs/cli.md)
 
-### Top‑level commands
+### Top-level commands
 
-- `start` — record an ad‑hoc session for a running app
-- `collect` — run a single Macrobenchmark test iteration and collect a trace
+- `ios start` — record an Instruments session for a running app
+- `android start` — record an ad-hoc session for a running Android app
+- `android collect` — run a single Macrobenchmark test iteration and collect a trace
 
 ### Perfetto (Default)
 
 ```bash
 # Ad-hoc session
-mperf start -p com.example.app
+aperf start -p com.example.app
 
 # Single test iteration
-mperf collect -p com.example.app -t SomeBenchmark#case
+aperf collect -p com.example.app -t SomeBenchmark#case
 ```
 
 ### Simpleperf
@@ -93,10 +109,10 @@ mperf collect -p com.example.app -t SomeBenchmark#case
 ```bash
 # Basic sampling, opens in Firefox Profiler
 # Defaults to using `-e cpu-clock -f 4000 -g` with noisy frames removed (extraneous RxJava frames, kotlinx coroutines, DEDUPED frames and ART frames)
-mperf start -f simpleperf -p com.example.app
+aperf start -f simpleperf -p com.example.app
 
 # Advanced: custom simpleperf args, symbolization, and filtering
-mperf start -f simpleperf -p com.example.app \
+aperf start -f simpleperf -p com.example.app \
   # Off-CPU tracing with sampling every 4KHz (.25ms)
   --simpleperfArgs "e task-clock -g -f 4000 --trace-offcpu" \
   # Provide directory of symbols for symbolicating native frames
@@ -109,7 +125,7 @@ mperf start -f simpleperf -p com.example.app \
   --no-show-art-frames
 
 # View sampling profiler data in Perfetto instead
-mperf start -f simpleperf -p com.example.app --ui perfetto
+aperf start -f simpleperf -p com.example.app --ui perfetto
 
 # Note: `mperf collect` does not support simpleperf due to Macrobenchmark limitations
 ```
@@ -117,14 +133,26 @@ mperf start -f simpleperf -p com.example.app --ui perfetto
 ### ART Method Tracing
 
 ```bash
-mperf start -f method -p com.example.app
+aperf start -f method -p com.example.app
 
 # Use Perfetto instead to view ART Method Trace
-mperf start -p com.example.app -f method --ui perfetto
+aperf start -p com.example.app -f method --ui perfetto
 
 # NOTE: Due to Macrobenchmark limitations, the number of iterations specified in `measureRepeat(...)` will be performed before the method trace is collected.
-mperf collect -p com.example.app -f method -t SomeBenchmark#case
+aperf collect -p com.example.app -f method -t SomeBenchmark#case
 ```
+
+### Instruments (iOS)
+
+```bash
+# Time Profiler template, open results in Firefox Profiler
+iperf start -b com.example.app --template "Time Profiler" --ui firefox
+
+# Collect with multiple instruments and export to Perfetto
+iperf start -b com.example.app --instrument "Time Profiler" --instrument "Core Animation" --ui perfetto
+```
+
+Instrument traces can be reviewed directly in Instruments, or converted for analysis in Firefox Profiler or Perfetto via the `--ui` flag.
 
 ## Configuration
 
@@ -143,7 +171,7 @@ With this in place, you can omit `-p/--package` and `-i/--instrumentation` in mo
 - Build: `./gradlew build`
 - Test: `./gradlew test`
 - Lint: `./gradlew ktlintCheck` / `./gradlew ktlintFormat`
-- Run: `./gradlew run --args "start -p com.example.app"`
+- Run: `./gradlew run --args "android start -p com.example.app"`
 - Generate CLI docs: `./gradlew generateDocs` → `docs/cli.md`
 - Contributor workflow and coding conventions: see [`AGENTS.md`](AGENTS.md).
 
@@ -165,7 +193,3 @@ git push origin v1.2.3
 Find published releases and download artifacts at:
 
 https://github.com/benjaminromano/mperf/releases
-
-## Future Works
-
-In the future, iOS profiler collection support will be added.
