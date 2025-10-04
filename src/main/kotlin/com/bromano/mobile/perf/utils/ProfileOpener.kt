@@ -1,9 +1,12 @@
 package com.bromano.mobile.perf.utils
 
 import com.bromano.mobile.perf.ProfilerFormat
+import com.bromano.mobile.perf.gecko.InstrumentsConverter
+import com.google.gson.Gson
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import java.io.File
+import java.io.FileInputStream
 import java.net.InetSocketAddress
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
@@ -34,12 +37,13 @@ open class ProfileOpener(
      * @param customOrigin optional override for the UI origin (defaults per format)
      */
     open fun openProfile(
+        packageName: String?,
         trace: Path,
         format: ProfilerFormat,
         profileViewerOverride: ProfileViewer? = null,
         customOrigin: String? = null,
     ) {
-        val file = trace.toFile().absoluteFile
+        var file = trace.toFile().absoluteFile
         require(file.exists()) { "Trace not found: $file" }
 
         val profileViewer =
@@ -48,7 +52,21 @@ open class ProfileOpener(
                 ProfilerFormat.SIMPLEPERF,
                 ProfilerFormat.METHOD,
                 -> ProfileViewer.FIREFOX
+                ProfilerFormat.INSTRUMENTS -> ProfileViewer.INSTRUMENTS
             }
+
+        // Handle Instruments traces directly without HTTP server
+        if (profileViewer == ProfileViewer.INSTRUMENTS) {
+            shell.runCommand("open -a Instruments \"${file.absolutePath}\"")
+            return
+        }
+
+        // If the file was collected by Instruments, we may need to convert into Gecko format, if not already done so.
+        if (format == ProfilerFormat.INSTRUMENTS && !isGzipFile(file)) {
+            val intermediateOutput = Files.createTempFile("instruments", ".tar.gz")
+            Gson().toJson(InstrumentsConverter.convert(packageName, trace).toFile(intermediateOutput))
+            file = intermediateOutput.toFile()
+        }
 
         val (resolvedOrigin, openUrlBuilder) =
             when (profileViewer) {
@@ -70,6 +88,10 @@ open class ProfileOpener(
                         "$origin/from-url/$encoded"
                     }
                     origin to builder
+                }
+                ProfileViewer.INSTRUMENTS -> {
+                    // This should never be reached due to early return above
+                    throw IllegalStateException("INSTRUMENTS should be handled directly")
                 }
             }
 
@@ -133,5 +155,13 @@ open class ProfileOpener(
         val headers = exchange.responseHeaders
         headers.add("Cache-Control", "no-cache")
         exchange.sendResponseHeaders(404, 0)
+    }
+
+    private fun isGzipFile(file: File): Boolean {
+        FileInputStream(file).use { input ->
+            val b1 = input.read()
+            val b2 = input.read()
+            return b1 == 0x1F && b2 == 0x8B
+        }
     }
 }

@@ -20,6 +20,11 @@ data class Config(
      */
     @SerialName("android")
     val android: AndroidConfig? = null,
+    /**
+     * iOS specific configs
+     */
+    @SerialName("ios")
+    val ios: IosConfig? = null,
 )
 
 @Serializable
@@ -34,6 +39,20 @@ data class AndroidConfig(
      */
     @SerialName("instrumentationRunner")
     val instrumentationRunner: String? = null,
+)
+
+@Serializable
+data class IosConfig(
+    /**
+     * The bundle identifier of app to profile
+     */
+    @SerialName("bundleIdentifier")
+    val bundleIdentifier: String? = null,
+    /**
+     * Default device/simulator UDID
+     */
+    @SerialName("deviceId")
+    val deviceId: String? = null,
 )
 
 fun getConfig(): Path =

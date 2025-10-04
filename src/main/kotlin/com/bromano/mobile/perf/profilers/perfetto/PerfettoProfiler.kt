@@ -64,7 +64,7 @@ class PerfettoProfiler(
         // TODO: An alternative methodology to communicate with perfetto process should be explored.
         // We attempt to print out the press any key statement after the Perfetto output
         Thread.sleep(1000)
-        Logger.info("Press Enter to end tracing...")
+        Logger.info("Press any key to end tracing...")
         awaitStop()
 
         val processName = perfettoBinary.split("/").last()

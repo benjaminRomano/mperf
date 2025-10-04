@@ -59,7 +59,7 @@ mperf --help
 mperf start -p com.example.app
 ```
 
-Press Enter to stop tracing. When done, the trace will be opened in Perfetto UI.
+Press any key to stop tracing. When done, the trace will be opened in Perfetto UI.
 
 **Run a single performance test iteration and pull the trace**
 
@@ -145,6 +145,7 @@ With this in place, you can omit `-p/--package` and `-i/--instrumentation` in mo
 - Lint: `./gradlew ktlintCheck` / `./gradlew ktlintFormat`
 - Run: `./gradlew run --args "start -p com.example.app"`
 - Generate CLI docs: `./gradlew generateDocs` → `docs/cli.md`
+- Contributor workflow and coding conventions: see [`AGENTS.md`](AGENTS.md).
 
 ## Releasing
 

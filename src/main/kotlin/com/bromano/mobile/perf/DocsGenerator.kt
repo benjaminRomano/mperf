@@ -1,7 +1,10 @@
 package com.bromano.mobile.perf
 
-import com.bromano.mobile.perf.commands.android.CollectCommand
-import com.bromano.mobile.perf.commands.android.StartCommand
+import com.bromano.mobile.perf.commands.android.AndroidCollectCommand
+import com.bromano.mobile.perf.commands.android.AndroidCommand
+import com.bromano.mobile.perf.commands.android.AndroidStartCommand
+import com.bromano.mobile.perf.commands.ios.IosCommand
+import com.bromano.mobile.perf.commands.ios.IosStartCommand
 import com.bromano.mobile.perf.profilers.ProfilerExecutor
 import com.bromano.mobile.perf.utils.ShellExecutor
 import com.github.ajalt.clikt.core.BaseCliktCommand
@@ -58,8 +61,13 @@ object DocsGenerator {
         val root =
             MobilePerfCommand()
                 .subcommands(
-                    StartCommand(shell, config, noop),
-                    CollectCommand(shell, config, noop),
+                    IosCommand().subcommands(
+                        IosStartCommand(shell, config, noop),
+                    ),
+                    AndroidCommand().subcommands(
+                        AndroidStartCommand(shell, config, noop),
+                        AndroidCollectCommand(shell, config, noop),
+                    ),
                 )
 
         // Switch help formatter to Markdown
@@ -71,11 +79,19 @@ object DocsGenerator {
             // ignore; we only need context initialized
         }
 
-        fun render(cmd: BaseCliktCommand<*>): String {
+        fun render(
+            cmd: BaseCliktCommand<*>,
+            level: Int = 1,
+        ): String {
             // Ensure stable root title regardless of Clikt's inferred command name
-            val title = if (cmd.currentContext.parent == null) "mperf" else cmd.commandName
+            val title = if (level == 1) "mperf" else cmd.commandName
+            val heading = "#".repeat(level)
             val sb = StringBuilder()
-            sb.append("# ").append(title).append('\n')
+            sb
+                .append(heading)
+                .append(' ')
+                .append(title)
+                .append('\n')
 
             // Description (omitted here to avoid requiring a parse context)
 
@@ -143,15 +159,17 @@ object DocsGenerator {
 
             sb.append(renderParamsAsTables(cmd))
 
-            // Render subcommands recursively (one level)
+            // Render subcommands recursively
             for (sub in cmd.registeredSubcommands()) {
-                sb.append("## ").append(sub.commandName).append('\n')
                 // Ensure sub has a valid context
                 try {
                     sub.resetContext(cmd.currentContext)
                 } catch (_: Exception) {
                 }
-                sb.append(renderParamsAsTables(sub))
+                if (sb.isNotEmpty() && sb[sb.length - 1] != '\n') {
+                    sb.append('\n')
+                }
+                sb.append(render(sub, level + 1))
             }
             return sb.toString()
         }

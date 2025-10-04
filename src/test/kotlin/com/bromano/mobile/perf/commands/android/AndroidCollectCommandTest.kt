@@ -17,7 +17,7 @@ import org.mockito.kotlin.verify
 import java.nio.file.Path
 import kotlin.test.assertTrue
 
-class CollectCommandTest {
+class AndroidCollectCommandTest {
     @Test
     fun `uses fully qualified test when provided`() {
         val device = "device-1"
@@ -71,7 +71,7 @@ class CollectCommandTest {
                 }
             }
 
-        val cmd = CollectCommand(shell, Config(android = AndroidConfig(packageName = pkg)), executor)
+        val cmd = AndroidCollectCommand(shell, Config(android = AndroidConfig(packageName = pkg)), executor)
         cmd.parse(listOf("-d", device, "-p", pkg, "-i", instr, "-t", fqTest))
         assertTrue(executed)
 
@@ -143,7 +143,7 @@ class CollectCommandTest {
                 }
             }
 
-        val cmd = CollectCommand(shell, Config(android = AndroidConfig(packageName = pkg)), executor)
+        val cmd = AndroidCollectCommand(shell, Config(android = AndroidConfig(packageName = pkg)), executor)
         cmd.parse(listOf("-d", device, "-p", pkg, "-i", instr, "-t", "startup"))
         assertTrue(selected == expectedChoices[1])
     }

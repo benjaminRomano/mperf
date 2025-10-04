@@ -17,11 +17,11 @@ import java.nio.file.Paths
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
-class CollectCommand(
+class AndroidCollectCommand(
     private val shell: Shell,
     private val config: Config,
     private val executor: ProfilerExecutor,
-) : CliktCommand() {
+) : CliktCommand(name = "collect") {
     override fun help(context: Context) = "Collect performance data over single iteration of a performance test"
 
     private val outputPath by option("-o", "--out", help = "Output path for trace")

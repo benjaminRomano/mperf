@@ -18,4 +18,9 @@ enum class ProfilerFormat {
      * Android Runtime Method Tracing
      */
     METHOD,
+
+    /**
+     * iOS Instruments Trace using xctrace
+     */
+    INSTRUMENTS,
 }

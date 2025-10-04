@@ -15,11 +15,11 @@ import java.nio.file.Paths
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
-class StartCommand(
+class AndroidStartCommand(
     private val shell: Shell,
     private val config: Config,
     private val executor: ProfilerExecutor,
-) : CliktCommand() {
+) : CliktCommand(name = "start") {
     override fun help(context: Context) = "Run profiler over abitrary app session"
 
     private val profilerOption by androidProfilerOptions()

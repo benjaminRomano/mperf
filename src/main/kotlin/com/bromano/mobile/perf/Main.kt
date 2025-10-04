@@ -1,14 +1,21 @@
 package com.bromano.mobile.perf
 
-import com.bromano.mobile.perf.commands.android.CollectCommand
-import com.bromano.mobile.perf.commands.android.StartCommand
+import com.bromano.mobile.perf.commands.android.AndroidCollectCommand
+import com.bromano.mobile.perf.commands.android.AndroidCommand
+import com.bromano.mobile.perf.commands.android.AndroidStartCommand
+import com.bromano.mobile.perf.commands.ios.ConvertCommand
+import com.bromano.mobile.perf.commands.ios.IosCommand
+import com.bromano.mobile.perf.commands.ios.IosStartCommand
 import com.bromano.mobile.perf.profilers.ProfilerExecutorImpl
+import com.bromano.mobile.perf.profilers.instruments.InstrumentsProfiler
+import com.bromano.mobile.perf.profilers.instruments.InstrumentsProfilerOptions
 import com.bromano.mobile.perf.profilers.method.MethodProfiler
 import com.bromano.mobile.perf.profilers.perfetto.PerfettoProfiler
 import com.bromano.mobile.perf.profilers.simpleperf.SimpleperfProfiler
 import com.bromano.mobile.perf.utils.Adb
 import com.bromano.mobile.perf.utils.ProfileOpener
 import com.bromano.mobile.perf.utils.ShellExecutor
+import com.bromano.mobile.perf.utils.XcodeUtils
 import com.charleskorn.kaml.Yaml
 import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.core.Context
@@ -26,6 +33,7 @@ fun main(args: Array<String>) {
     val config = Yaml.default.decodeFromString(Config.serializer(), getConfig().readText())
     val shell = ShellExecutor()
 
+    // TODO: Set up real DI at some point
     val profilerExecutor =
         ProfilerExecutorImpl(
             mapOf(
@@ -36,14 +44,31 @@ fun main(args: Array<String>) {
                     SimpleperfProfiler(shell, Adb(device, shell), options as SimpleperfOptions)
                 },
                 ProfilerFormat.METHOD to { shell, device, _ -> MethodProfiler(Adb(device, shell)) },
+                ProfilerFormat.INSTRUMENTS to { shell, device, options ->
+                    (options as InstrumentsOptions).let {
+                        InstrumentsProfiler(
+                            XcodeUtils(device, shell),
+                            InstrumentsProfilerOptions(
+                                it.template,
+                                it.instruments,
+                            ),
+                        )
+                    }
+                },
             ),
             ProfileOpener(shell),
         )
 
     MobilePerfCommand()
         .subcommands(
-            StartCommand(shell, config, profilerExecutor),
-            CollectCommand(shell, config, profilerExecutor),
+            IosCommand().subcommands(
+                IosStartCommand(shell, config, profilerExecutor),
+            ),
+            AndroidCommand().subcommands(
+                AndroidStartCommand(shell, config, profilerExecutor),
+                AndroidCollectCommand(shell, config, profilerExecutor),
+            ),
+            ConvertCommand(ProfileOpener(shell)),
         ).main(args)
 }
 

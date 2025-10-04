@@ -43,6 +43,14 @@ class SimpleperfOptions : ProfilerOptionGroup(ProfilerFormat.SIMPLEPERF) {
         .multiple(listOf("^io\\.reactivex.*$", "^\\[DEDUPED\\].*$", "^kotlinx?\\.coroutines.*$"))
 }
 
+class InstrumentsOptions : ProfilerOptionGroup(ProfilerFormat.INSTRUMENTS) {
+    val template by option("--template", help = "Instruments template to use for profiling")
+        .default("Time Profiler")
+
+    val instruments by option("--instrument", help = "Instruments to include")
+        .multiple()
+}
+
 fun ParameterHolder.profilerOptions(
     profilerFormats: Set<ProfilerFormat>,
     default: ProfilerFormat,
@@ -52,6 +60,7 @@ fun ParameterHolder.profilerOptions(
             ProfilerFormat.PERFETTO to PerfettoOptions(),
             ProfilerFormat.SIMPLEPERF to SimpleperfOptions(),
             ProfilerFormat.METHOD to MethodOptions(),
+            ProfilerFormat.INSTRUMENTS to InstrumentsOptions(),
         )
 
     return option("-f", "--format", help = "Profiler to use for collection")
@@ -70,4 +79,10 @@ fun ParameterHolder.androidProfilerOptions() =
             ProfilerFormat.METHOD,
         ),
         ProfilerFormat.PERFETTO,
+    )
+
+fun ParameterHolder.iosProfilerOptions() =
+    profilerOptions(
+        setOf(ProfilerFormat.INSTRUMENTS),
+        ProfilerFormat.INSTRUMENTS,
     )

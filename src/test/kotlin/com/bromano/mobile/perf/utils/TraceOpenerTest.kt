@@ -42,7 +42,7 @@ class TraceOpenerTest {
         val opener = ProfileOpener(PerfettoFetchingShell())
 
         val start = System.currentTimeMillis()
-        opener.openProfile(tmp, ProfilerFormat.PERFETTO)
+        opener.openProfile("test", tmp, ProfilerFormat.PERFETTO)
         val durationMs = System.currentTimeMillis() - start
         // Should complete well under the 1 minute timeout
         assertTrue(durationMs < 10_000, "openTrace should return quickly after single GET")
@@ -55,7 +55,7 @@ class TraceOpenerTest {
         val opener = ProfileOpener(SimpleperfFetchingShell())
 
         val start = System.currentTimeMillis()
-        opener.openProfile(tmp, ProfilerFormat.SIMPLEPERF)
+        opener.openProfile("test", tmp, ProfilerFormat.SIMPLEPERF)
         val durationMs = System.currentTimeMillis() - start
         assertTrue(durationMs < 10_000, "openTrace should return quickly after single GET")
     }
@@ -65,7 +65,7 @@ class TraceOpenerTest {
         val opener = ProfileOpener(PerfettoFetchingShell())
         val missing = Path.of("does-not-exist.trace")
         assertFailsWith<IllegalArgumentException> {
-            opener.openProfile(missing, ProfilerFormat.PERFETTO)
+            opener.openProfile("test", missing, ProfilerFormat.PERFETTO)
         }
     }
 }

@@ -54,7 +54,7 @@ class ProfilerExecutorImpl(
 
         collector.execute(packageName, output)
 
-        profileOpener.openProfile(output, profilerOptionGroup.format)
+        profileOpener.openProfile(packageName, output, profilerOptionGroup.format)
     }
 
     override fun executeTest(
@@ -73,9 +73,6 @@ class ProfilerExecutorImpl(
 
         collector.executeTest(packageName, instrumentationPackageName, testCase, output)
 
-        // TODO: Profiler can have multiple output formats
-        // (e.g. Stack Sampling benchmark tests use either simpleperf or ART method trace format)
-        // Alternatively, the trace could be opened in multiple viewers (e.g. Gecko can be opened in Perfetto or Firefox)
-        profileOpener.openProfile(output, profilerOptionGroup.format, profileViewerOverride)
+        profileOpener.openProfile(packageName, output, profilerOptionGroup.format, profileViewerOverride)
     }
 }

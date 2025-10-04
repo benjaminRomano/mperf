@@ -15,4 +15,9 @@ enum class ProfileViewer {
      * Firefox Profiler UI
      */
     FIREFOX,
+
+    /**
+     * iOS Instruments app
+     */
+    INSTRUMENTS,
 }

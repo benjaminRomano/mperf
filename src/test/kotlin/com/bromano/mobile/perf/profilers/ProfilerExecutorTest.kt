@@ -59,6 +59,7 @@ class ProfilerExecutorTest {
         val openerFactory: (Shell) -> ProfileOpener = {
             object : ProfileOpener(it) {
                 override fun openProfile(
+                    packageName: String?,
                     trace: Path,
                     format: ProfilerFormat,
                     profileViewerOverride: ProfileViewer?,

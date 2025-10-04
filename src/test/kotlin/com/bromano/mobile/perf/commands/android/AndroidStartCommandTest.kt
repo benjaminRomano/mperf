@@ -18,12 +18,12 @@ import org.mockito.kotlin.verify
 import java.nio.file.Path
 import kotlin.test.assertFailsWith
 
-class StartCommandTest {
+class AndroidStartCommandTest {
     @Test
     fun `throws when package not provided`() {
         val shell = mock<Shell>()
         val profilerExecutor = mock<ProfilerExecutor>()
-        val cmd = StartCommand(shell, Config(android = null), profilerExecutor)
+        val cmd = AndroidStartCommand(shell, Config(android = null), profilerExecutor)
         assertFailsWith<PrintMessage> {
             cmd.parse(emptyList())
         }
@@ -39,7 +39,7 @@ class StartCommandTest {
                 on { selectChoice(any(), anyOrNull()) } doReturn null
             }
         val profilerExecutor = mock<ProfilerExecutor>()
-        val cmd = StartCommand(shell, Config(android = AndroidConfig(packageName = "com.example.app")), profilerExecutor)
+        val cmd = AndroidStartCommand(shell, Config(android = AndroidConfig(packageName = "com.example.app")), profilerExecutor)
         assertFailsWith<PrintMessage> {
             cmd.parse(emptyList())
         }
@@ -85,7 +85,7 @@ class StartCommandTest {
                 }
             }
 
-        val cmd = StartCommand(shell, Config(android = AndroidConfig(packageName = "com.example.app")), executor)
+        val cmd = AndroidStartCommand(shell, Config(android = AndroidConfig(packageName = "com.example.app")), executor)
         cmd.parse(emptyList())
         kotlin.test.assertTrue(executed)
     }

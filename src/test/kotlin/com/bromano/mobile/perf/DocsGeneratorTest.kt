@@ -31,32 +31,34 @@ class DocsGeneratorTest {
         assertTrue(md.startsWith("# mperf"))
         // Root options section has blank line before the table
         assertContains(md, "**Options**\n\n| Name(s) | Metavar | Description |")
-        // Root commands table lists subcommands
+        // Root commands table lists top-level command groups
         assertContains(md, "**Commands**\n\n| Name | Description |")
-        assertContains(md, "| start | Run profiler over abitrary app session |")
-        assertContains(md, "| collect | Collect performance data over single iteration of a performance test |")
+        assertContains(md, "| ios |  |")
+        assertContains(md, "| android |  |")
     }
 
     @Test
     fun `start command options include expected rows`() {
         val md = DocsGenerator.generateCliDocsMarkdown()
 
-        // Ensure subcommand header present and options table has spacing
-        assertContains(md, "## start")
+        // Ensure android group and start command section are present with table spacing
+        assertContains(md, "## android")
+        assertContains(md, "### start")
         assertContains(md, "**Options**\n\n| Name(s) | Metavar | Description |")
         // Format option with escaped pipes in metavar
         assertContains(md, "| --format, -f | (perfetto\\|simpleperf\\|method) | Profiler to use for collection |")
         // A few other representative options
         assertContains(md, "| --out, -o | path | Output path for trace |")
         assertContains(md, "| --package, -p | text | Package name |")
-        assertContains(md, "| --ui | (PERFETTO\\|FIREFOX) | Profile viewer to open trace in |")
+        assertContains(md, "| --ui | (PERFETTO\\|FIREFOX\\|INSTRUMENTS) | Profile viewer to open trace in |")
     }
 
     @Test
     fun `collect command options include instrumentation and test args`() {
         val md = DocsGenerator.generateCliDocsMarkdown()
 
-        assertContains(md, "## collect")
+        assertContains(md, "## android")
+        assertContains(md, "### collect")
         assertContains(md, "**Options**\n\n| Name(s) | Metavar | Description |")
         assertContains(
             md,

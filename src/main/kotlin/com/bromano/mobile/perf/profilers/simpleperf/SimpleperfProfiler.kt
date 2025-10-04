@@ -63,7 +63,7 @@ class SimpleperfProfiler(
 
         val proc = shell.startProcess(simpleperfCommand)
 
-        Logger.info("Press Enter to end tracing...")
+        Logger.info("Press any key to end tracing...")
         awaitStop()
 
         Logger.info("Waiting for simpleperf to shutdown...")

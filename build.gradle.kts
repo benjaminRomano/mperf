@@ -36,6 +36,9 @@ dependencies {
     testImplementation("org.mockito.kotlin:mockito-kotlin:6.0.0")
     testImplementation("org.mockito:mockito-core:5.19.0")
     mockitoAgent("org.mockito:mockito-core:5.19.0") { isTransitive = false }
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
+    implementation("com.google.code.gson:gson:2.13.2")
 }
 
 tasks.test { useJUnitPlatform() }

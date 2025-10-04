@@ -9,7 +9,7 @@ import java.util.concurrent.TimeUnit
  *
  * This utility class is designed to support testability of shell invocations.
  *
- * TODO: In the future, an implementation with support for streaming output could be beneficial
+ * TODO: This abstraction is dubious.
  */
 interface Shell {
     /**
@@ -82,10 +82,17 @@ interface Shell {
         timeout: Long,
         unit: TimeUnit,
     ): Boolean
+
+    /**
+     * Create a Process Builder
+     */
+    fun newProcessBuilder(command: String): ProcessBuilder
 }
 
 open class ShellExecutor : Shell {
     private fun systemShell(): String = System.getenv("SHELL")?.takeIf { it.isNotBlank() } ?: "/bin/bash"
+
+    override fun newProcessBuilder(command: String): ProcessBuilder = ProcessBuilder(listOf(systemShell(), "-c", command))
 
     override fun startProcess(command: String): Process =
         ProcessBuilder(listOf(systemShell(), "-c", command))
