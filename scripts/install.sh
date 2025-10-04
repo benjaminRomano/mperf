@@ -65,7 +65,7 @@ find_asset_url() {
   # $1 = JSON, $2 = suffix to match
   echo "$1" | grep -Eo '"browser_download_url"\s*:\s*"[^"]+"' | \
     sed -E 's/.*"(https:[^"]+)"/\1/' | \
-    grep "$2" | head -n1
+    grep -E -e "$2" | head -n1
 }
 
 JSON=$(fetch_latest_json)
@@ -144,8 +144,34 @@ echo "iOS alias created at: $IPERF_LAUNCHER"
 
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
-  *) echo "Note: $BIN_DIR is not on your PATH. Add it, e.g.:" && \
-     echo "  export PATH=\"$BIN_DIR:\$PATH\"" ;;
+  *)
+    echo "Note: $BIN_DIR is not on your PATH. Add it, e.g.:"
+    echo "  export PATH=\"$BIN_DIR:\$PATH\""
+    ;;
 esac
 
-echo "Done. Try: mperf --help"
+printf '\n'
+
+BOX_LINES=(
+  "Installed commands for mperf $VERSION_EXTRACTED"
+  "mperf   -> $LAUNCHER"
+  "aperf   -> $APERF_LAUNCHER"
+  "iperf   -> $IPERF_LAUNCHER"
+  "Run 'mperf --help' to get started"
+)
+
+max_len=0
+for line in "${BOX_LINES[@]}"; do
+  if (( ${#line} > max_len )); then
+    max_len=${#line}
+  fi
+done
+
+border=$(printf '%*s' "$((max_len + 4))" '' | tr ' ' '#')
+echo "$border"
+for line in "${BOX_LINES[@]}"; do
+  printf "# %-*s #\n" "$max_len" "$line"
+done
+echo "$border"
+
+echo "\nDone. Try: mperf --help"

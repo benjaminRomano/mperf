@@ -39,6 +39,12 @@ The CLI can be installed using the installation helper. Once ran `mperf`, `aperf
 curl -fsSL https://raw.githubusercontent.com/benjaminromano/mperf/refs/heads/main/scripts/install.sh | bash
 ```
 
+To remove the CLI and launcher aliases, run the companion script:
+
+```
+curl -fsSL https://raw.githubusercontent.com/benjaminromano/mperf/refs/heads/main/scripts/uninstall.sh | bash
+```
+
 ### Manual Installation
 
 Alternatively, download the latest JAR from [GitHub Releases](https://github.com/benjaminromano/mperf/releases) and add the following snippet to your POSIX shell profile (for example `~/.zshrc` or `~/.bashrc`). Update `MPERF_JAR` to the location where you stored the download.
@@ -153,6 +159,14 @@ iperf start -b com.example.app --instrument "Time Profiler" --instrument "Core A
 ```
 
 Instrument traces can be reviewed directly in Instruments, or converted for analysis in Firefox Profiler or Perfetto via the `--ui` flag.
+
+To convert a saved Instruments trace into a Gecko profile for Firefox Profiler:
+
+```bash
+iperf convert --input MyTrace.trace --output my-trace.gecko.json --app MyApp
+```
+
+See the [CLI reference](docs/cli.md) for additional options, such as targeting a specific run or choosing a viewer.
 
 ## Configuration
 
