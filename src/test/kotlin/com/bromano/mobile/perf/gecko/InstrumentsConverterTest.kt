@@ -7,7 +7,6 @@ import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.Path
 import java.util.zip.GZIPInputStream
 import kotlin.io.path.inputStream
-import kotlin.test.Ignore
 import kotlin.test.assertEquals
 
 class InstrumentsConverterTest {
