@@ -16,7 +16,7 @@ concurrency:
 jobs:
   build:
     name: Build (Gradle, JDK 21)
-    runs-on: ubuntu-latest
+    runs-on: macos-14
 
     steps:
       - name: Checkout
@@ -24,6 +24,11 @@ jobs:
 
       - name: Validate Gradle Wrapper
         uses: gradle/actions/wrapper-validation@v4
+
+      - name: Setup Xcode
+        uses: actions/setup-xcode@v2
+        with:
+          xcode-version: latest-stable
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -37,4 +42,3 @@ jobs:
 
       - name: Build
         run: ./gradlew build --no-daemon --stacktrace
-

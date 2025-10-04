@@ -11,9 +11,7 @@ import kotlin.test.Ignore
 import kotlin.test.assertEquals
 
 class InstrumentsConverterTest {
-    // TODO: Fix up CI Builder
     @Test
-    @Ignore("This requires CI builder to have XCode")
     fun convertsTraceToExpectedGeckoProfile(
         @TempDir tempDir: Path,
     ) {
