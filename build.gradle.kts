@@ -7,7 +7,7 @@ plugins {
     kotlin("plugin.allopen") version "2.2.20"
     id("com.google.protobuf") version "0.9.5"
     id("org.jlleitschuh.gradle.ktlint") version "13.1.0"
-    id("com.github.johnrengelman.shadow") version "8.1.1"
+    id("com.gradleup.shadow") version "9.0.0"
     application
 }
 
