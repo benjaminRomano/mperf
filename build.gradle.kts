@@ -18,7 +18,9 @@ version = providers.gradleProperty("releaseVersion").getOrElse("1.0-SNAPSHOT")
 
 application { mainClass.set("com.bromano.mobile.perf.MainKt") }
 
-repositories { mavenCentral() }
+repositories {
+    mavenCentral()
+}
 
 val mockitoAgent = configurations.create("mockitoAgent")
 
@@ -32,7 +34,9 @@ dependencies {
 
     // Testing dependencies
     testImplementation(kotlin("test"))
-    testImplementation("org.junit.jupiter:junit-jupiter:5.13.4")
+    testImplementation("org.junit.jupiter:junit-jupiter-api:5.13.4")
+    testImplementation("org.junit.jupiter:junit-jupiter-params:5.13.4")
+    testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:5.13.4")
     testImplementation("org.mockito.kotlin:mockito-kotlin:6.0.0")
     testImplementation("org.mockito:mockito-core:5.19.0")
     mockitoAgent("org.mockito:mockito-core:5.19.0") { isTransitive = false }
@@ -44,6 +48,11 @@ dependencies {
 tasks.test { useJUnitPlatform() }
 
 kotlin { jvmToolchain(21) }
+
+configurations.configureEach {
+    // Codex Web cannot download org.apiguardian:apiguardian-api (HTTP 403), so keep this exclusion.
+    exclude(group = "org.apiguardian", module = "apiguardian-api")
+}
 
 protobuf {
     protoc { artifact = "com.google.protobuf:protoc:4.32.0" }

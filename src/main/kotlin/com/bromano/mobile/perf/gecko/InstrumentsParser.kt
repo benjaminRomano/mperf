@@ -395,7 +395,7 @@ object InstrumentsParser {
     ): Document {
         val xmlStr =
             ShellExecutor().runCommand(
-                "xctrace export --input $input  --xpath '$xpath'",
+                "xcrun xctrace export --input \"${input.toAbsolutePath()}\" --xpath '$xpath'",
                 redirectOutput = ProcessBuilder.Redirect.PIPE,
                 shell = true,
             )
@@ -411,7 +411,7 @@ object InstrumentsParser {
     private fun queryXCTraceTOC(input: Path): Document {
         val xmlStr =
             ShellExecutor().runCommand(
-                "xctrace export --input $input --toc",
+                "xcrun xctrace export --input \"${input.toAbsolutePath()}\" --toc",
                 redirectOutput = ProcessBuilder.Redirect.PIPE,
                 shell = true,
             )
