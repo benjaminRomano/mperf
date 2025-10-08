@@ -1,6 +1,8 @@
 package com.bromano.mobile.perf.gecko
 
+import com.bromano.mobile.perf.utils.ShellCommandException
 import com.bromano.mobile.perf.utils.ShellExecutor
+import com.bromano.mobile.perf.utils.withRetry
 import org.w3c.dom.Document
 import org.w3c.dom.Element
 import org.w3c.dom.Node
@@ -38,6 +40,11 @@ const val SYSCALL_SCHEMA = "syscall"
 
 private const val NUMBER_ATTR = "number"
 private const val SCHEMA_ATTR = "schema"
+
+
+// SIGSEV exit code. XCTrace can transiently fail with this exit code
+private const val SIGSEV_EXIT_CODE = 139
+private const val XCTRACE_RETRY_DELAY_MS = 500L
 
 /**
  * ThreadDescription contains a thread name and ID to identify
@@ -393,12 +400,17 @@ object InstrumentsParser {
         input: Path,
         xpath: String,
     ): Document {
-        val xmlStr =
+        val xmlStr = withRetry(
+            delayMillis = XCTRACE_RETRY_DELAY_MS,
+            shouldRetry = { (it as? ShellCommandException)?.exitCode == SIGSEV_EXIT_CODE }
+        ) {
             ShellExecutor().runCommand(
-                "xcrun xctrace export --input $input --xpath '$xpath'",
+                "xctrace export --input $input --xpath '$xpath'",
                 redirectOutput = ProcessBuilder.Redirect.PIPE,
-                shell = true,
+                redirectError = ProcessBuilder.Redirect.PIPE,
+                shell = true
             )
+        }
 
         return processXCTraceOutput(xmlStr)
     }
@@ -409,12 +421,17 @@ object InstrumentsParser {
      * Note: It doesn't seem possible to use `--xpath` to query the TOC
      */
     private fun queryXCTraceTOC(input: Path): Document {
-        val xmlStr =
+        val xmlStr = withRetry(
+            delayMillis = XCTRACE_RETRY_DELAY_MS,
+            shouldRetry = { (it as? ShellCommandException)?.exitCode == SIGSEV_EXIT_CODE }
+        ) {
             ShellExecutor().runCommand(
-                "xcrun xctrace export --input $input --toc",
+                "xctrace export --input $input --toc",
                 redirectOutput = ProcessBuilder.Redirect.PIPE,
-                shell = true,
+                redirectError = ProcessBuilder.Redirect.PIPE,
+                shell = true
             )
+        }
 
         return processXCTraceOutput(xmlStr)
     }

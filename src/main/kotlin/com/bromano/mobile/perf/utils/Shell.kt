@@ -4,6 +4,12 @@ import com.github.ajalt.clikt.core.PrintMessage
 import java.io.InputStream
 import java.util.concurrent.TimeUnit
 
+class ShellCommandException(
+    command: String,
+    val exitCode: Int,
+    stderr: String
+) : RuntimeException("Command, `$command`, failed with exit code $exitCode: $stderr")
+
 /**
  * Wrapper around operations that interact with shell.
  *
@@ -145,12 +151,9 @@ open class ShellExecutor : Shell {
         val exitCode = proc.waitFor()
 
         if (exitCode != 0 && !ignoreErrors) {
-            val error =
-                proc.errorStream
-                    .bufferedReader()
-                    .readText()
-                    .trim()
-            throw PrintMessage("Command failed: $command\n$error", printError = true)
+            // Note: This is only populated with `ProcessBuilder.Redirect.PIPE`
+            val error = proc.errorStream.bufferedReader().readText().trim()
+            throw ShellCommandException(command, exitCode, error)
         }
     }
 
