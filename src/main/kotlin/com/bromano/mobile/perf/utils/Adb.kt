@@ -1,7 +1,5 @@
 package com.bromano.mobile.perf.utils
 
-import com.github.ajalt.clikt.core.PrintMessage
-
 private const val ANDROID_N_SDK_VERSION = 24
 
 /**
@@ -93,7 +91,7 @@ class Adb(
             } else {
                 "su -c"
             }
-        } catch (_: PrintMessage) {
+        } catch (_: ShellCommandException) {
             return ""
         }
     }
