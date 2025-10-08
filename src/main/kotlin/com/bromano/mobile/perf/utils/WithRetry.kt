@@ -13,7 +13,7 @@ inline fun <T> withRetry(
     maxAttempts: Int = 3,
     delayMillis: Long = 0,
     shouldRetry: (Throwable) -> Boolean = { true },
-    block: () -> T
+    block: () -> T,
 ): T {
     require(maxAttempts >= 1) { "maxAttempts must be at least 1" }
 

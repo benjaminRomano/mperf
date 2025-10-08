@@ -1,13 +1,12 @@
 package com.bromano.mobile.perf.utils
 
-import com.github.ajalt.clikt.core.PrintMessage
 import java.io.InputStream
 import java.util.concurrent.TimeUnit
 
 class ShellCommandException(
     command: String,
     val exitCode: Int,
-    stderr: String
+    stderr: String,
 ) : RuntimeException("Command, `$command`, failed with exit code $exitCode: $stderr")
 
 /**
@@ -152,7 +151,11 @@ open class ShellExecutor : Shell {
 
         if (exitCode != 0 && !ignoreErrors) {
             // Note: This is only populated with `ProcessBuilder.Redirect.PIPE`
-            val error = proc.errorStream.bufferedReader().readText().trim()
+            val error =
+                proc.errorStream
+                    .bufferedReader()
+                    .readText()
+                    .trim()
             throw ShellCommandException(command, exitCode, error)
         }
     }
