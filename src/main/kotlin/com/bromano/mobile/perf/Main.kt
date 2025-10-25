@@ -37,7 +37,7 @@ fun main(args: Array<String>) {
     val httpClient = HttpClient(Java)
 
     // TODO: Set up real DI at some point
-    val profileOpener = ProfileOpener(shell, config.traceUploadUrl, httpClient)
+    val profileOpener = ProfileOpener(shell, config.traceHostUrl, httpClient)
     val profilerExecutor =
         ProfilerExecutorImpl(
             mapOf(

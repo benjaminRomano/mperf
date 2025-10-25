@@ -172,13 +172,13 @@ See the [CLI reference](docs/cli.md) for additional options, such as targeting a
 
 On first run, `~/.mperf/config.yml` is created. The following keys are supported:
 
-| Field | Default | Description                                                                                             |
-| --- | --- |---------------------------------------------------------------------------------------------------------|
-| `android.package` | _unset_ | Default Android application ID for `android start / collect`; avoids `-p/--package`.                    |
-| `android.instrumentationRunner` | _unset_ | Default instrumentation runner for Macrobenchmark collection; avoids `-i/--instrumentation`.            |
-| `ios.bundleIdentifier` | _unset_ | Preferred bundle identifier for `ios start`; avoids `-b/--bundle`.                                      |
-| `ios.deviceId` | _unset_ | Default iOS device/simulator UDID when no `--device` is provided.                                       |
-| `traceUploadUrl` | _unset_ | HTTPS endpoint where collected traces are uploaded (multipart `POST` returning `{"id":"<string>"}`), enabling shareable performance data. |
+| Field                           | Default | Description                                                                                                                                          |
+| ------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `android.package`               | _unset_ | Default Android application ID for `android start / collect`; avoids `-p/--package`.                                                                 |
+| `android.instrumentationRunner` | _unset_ | Default instrumentation runner for Macrobenchmark collection; avoids `-i/--instrumentation`.                                                         |
+| `ios.bundleIdentifier`          | _unset_ | Preferred bundle identifier for `ios start`; avoids `-b/--bundle`.                                                                                   |
+| `ios.deviceId`                  | _unset_ | Default iOS device/simulator UDID when no `--device` is provided.                                                                                    |
+| `traceHostUrl`                  | _unset_ | HTTP endpoint handling multipart `POST /trace` uploads and `GET /trace/<id>` downloads from the same base path, enabling shareable performance data. |
 
 Example:
 
@@ -188,8 +188,26 @@ android:
   instrumentationRunner: com.example.macrobenchmark/androidx.test.runner.AndroidJUnitRunner
 ios:
   bundleIdentifier: com.example.app
-traceUploadUrl: https://myserver.com/trace
+traceHostUrl: https://myserver.com/trace
 ```
+
+### Trace Hosting
+
+Set `traceHostUrl` in `~/.mperf/config.yml` to have `mperf` push every collected trace to a remote host instead of only keeping it locally. After each run the CLI issues a multipart `POST` to the configured endpoint (for example `https://trace.example.com/trace`), expects a JSON body containing an `id` field, and echoes the fully qualified `GET /trace/<id>` URL so you can share it with Firefox Profiler, Perfetto UI, or teammates. When `traceHostUrl` is unset, `mperf` falls back to opening the trace from disk as it does today.
+
+For local development there is a reference FastAPI implementation in `scripts/trace_server.py`:
+
+```bash
+pip install --upgrade fastapi uvicorn
+python3 scripts/trace_server.py
+```
+
+This helper service persists uploads to `/tmp/mperf` and exposes the same shape expected by `traceHostUrl`:
+
+- `POST /trace` with a multipart `file` field storing the bytes and returning `{"id":"<id>"}` (the download path lives at the `Location` header).
+- `GET /trace/<id>` streaming the file back with permissive CORS headers so Firefox Profiler can fetch it directly.
+
+Point `traceHostUrl` to `http://127.0.0.1:8080/trace` to test trace uploading locally.
 
 ## Development
 

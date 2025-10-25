@@ -7,6 +7,7 @@ import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.java.Java
+import io.ktor.client.plugins.ResponseException
 import io.ktor.client.request.forms.InputProvider
 import io.ktor.client.request.forms.MultiPartFormDataContent
 import io.ktor.client.request.forms.formData
@@ -40,7 +41,7 @@ private const val TRACE_HTTP_PORT = 9001
  */
 open class ProfileOpener(
     private val shell: Shell,
-    private val traceUploadUrl: String? = null,
+    private val traceHostUrl: String? = null,
     private val httpClient: HttpClient = HttpClient(Java),
 ) {
     /**
@@ -182,39 +183,66 @@ open class ProfileOpener(
     }
 
     private data class TraceUploadResponse(
-        val id: String,
+        val id: String?,
     )
 
+    // TODO: Generalize this to support direct uploads to Azure, GCS, etc.
     private fun maybeUploadTrace(file: File): String? {
-        val uploadEndpoint = traceUploadUrl ?: return null
-        val responseBody =
-            runBlocking {
-                httpClient
-                    .post(uploadEndpoint) {
-                        setBody(
-                            MultiPartFormDataContent(
-                                formData {
-                                    append(
-                                        "file",
-                                        InputProvider { file.inputStream().asInput() },
-                                        Headers.build {
-                                            append(HttpHeaders.ContentType, "application/octet-stream")
-                                            append(
-                                                HttpHeaders.ContentDisposition,
-                                                "form-data; name=\"file\"; filename=\"${file.name}\"",
-                                            )
-                                        },
-                                    )
-                                },
-                            ),
-                        )
-                    }.bodyAsText()
+        val uploadUrl = traceHostUrl ?: return null
+        return try {
+            val responseBody =
+                runBlocking {
+                    httpClient
+                        .post(uploadUrl) {
+                            setBody(
+                                MultiPartFormDataContent(
+                                    formData {
+                                        append(
+                                            "file",
+                                            InputProvider { file.inputStream().asInput() },
+                                            Headers.build {
+                                                append(HttpHeaders.ContentType, "application/octet-stream")
+                                                append(
+                                                    HttpHeaders.ContentDisposition,
+                                                    "form-data; name=\"file\"; filename=\"${file.name}\"",
+                                                )
+                                            },
+                                        )
+                                    },
+                                ),
+                            )
+                        }.bodyAsText()
+                }
+
+            val id =
+                Gson()
+                    .fromJson(responseBody, TraceUploadResponse::class.java)
+                    ?.id
+                    ?.takeIf { it.isNotBlank() }
+
+            if (id == null) {
+                Logger.warning(
+                    "Warning: Trace upload failed (invalid response without id): $responseBody",
+                )
+                return null
             }
-
-        val id = Gson().fromJson(responseBody, TraceUploadResponse::class.java).id
-
-        return URI.create(uploadEndpoint).resolve("./").resolve(id).toString().also {
-            println("Trace uploaded to $it")
+            val baseUrl = if (uploadUrl.endsWith("/")) uploadUrl else "$uploadUrl/"
+            URI.create(baseUrl + id).toString().also {
+                println("Trace uploaded to $it")
+            }
+        } catch (error: ResponseException) {
+            val status = error.response.status
+            val body =
+                runBlocking {
+                    error.response.bodyAsText()
+                }
+            Logger.warning(
+                "Warning: Trace upload failed (HTTP ${status.value} ${status.description}): $body",
+            )
+            null
+        } catch (error: Exception) {
+            Logger.warning("Warning: Trace upload failed (${error::class.simpleName}): ${error.message}")
+            null
         }
     }
 }

@@ -114,7 +114,7 @@ class ProfileOpenerTest {
             assertTrue(opened.startsWith("https://profiler.firefox.com/from-url/"))
             val encoded = opened.substringAfter("/from-url/")
             val decoded = URLDecoder.decode(encoded, StandardCharsets.UTF_8)
-            assertEquals("http://127.0.0.1:${server.address.port}/shared123", decoded)
+            assertEquals("$uploadUrl/shared123", decoded)
 
             val bodyString = String(receivedBodies.single(), StandardCharsets.UTF_8)
             assertTrue(bodyString.contains("upload-me"), "uploaded body should include trace contents")
