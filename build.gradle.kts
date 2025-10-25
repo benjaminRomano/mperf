@@ -29,6 +29,8 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-core:1.6.3")
     implementation("com.google.protobuf:protobuf-kotlin:4.32.0")
     implementation("com.google.protobuf:protobuf-java:4.32.0")
+    implementation("io.ktor:ktor-client-core:3.3.1")
+    implementation("io.ktor:ktor-client-java:3.3.1")
 
     // Testing dependencies
     testImplementation(kotlin("test"))

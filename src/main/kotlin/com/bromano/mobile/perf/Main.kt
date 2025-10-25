@@ -21,6 +21,8 @@ import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.core.Context
 import com.github.ajalt.clikt.core.main
 import com.github.ajalt.clikt.core.subcommands
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.java.Java
 import kotlin.io.path.readText
 
 class MobilePerfCommand : CliktCommand() {
@@ -32,8 +34,10 @@ class MobilePerfCommand : CliktCommand() {
 fun main(args: Array<String>) {
     val config = Yaml.default.decodeFromString(Config.serializer(), getConfig().readText())
     val shell = ShellExecutor()
+    val httpClient = HttpClient(Java)
 
     // TODO: Set up real DI at some point
+    val profileOpener = ProfileOpener(shell, config.traceHostUrl, httpClient)
     val profilerExecutor =
         ProfilerExecutorImpl(
             mapOf(
@@ -56,14 +60,14 @@ fun main(args: Array<String>) {
                     }
                 },
             ),
-            ProfileOpener(shell),
+            profileOpener,
         )
 
     MobilePerfCommand()
         .subcommands(
             IosCommand().subcommands(
                 IosStartCommand(shell, config, profilerExecutor),
-                ConvertCommand(ProfileOpener(shell)),
+                ConvertCommand(profileOpener),
             ),
             AndroidCommand().subcommands(
                 AndroidStartCommand(shell, config, profilerExecutor),
