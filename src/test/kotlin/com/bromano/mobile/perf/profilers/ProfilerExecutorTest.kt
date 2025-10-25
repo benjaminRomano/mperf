@@ -63,7 +63,6 @@ class ProfilerExecutorTest {
                     trace: Path,
                     format: ProfilerFormat,
                     profileViewerOverride: ProfileViewer?,
-                    customOrigin: String?,
                 ) {
                     opened = true
                     assertTrue(Files.exists(trace))

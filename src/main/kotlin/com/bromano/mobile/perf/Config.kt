@@ -25,6 +25,13 @@ data class Config(
      */
     @SerialName("ios")
     val ios: IosConfig? = null,
+    /**
+     * Optional endpoint that accepts trace uploads via HTTP POST.
+     *
+     * Example: https://myserver.com/trace
+     */
+    @SerialName("traceUploadUrl")
+    val traceUploadUrl: String? = null,
 )
 
 @Serializable

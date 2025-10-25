@@ -5,15 +5,27 @@ import com.bromano.mobile.perf.gecko.InstrumentsConverter
 import com.google.gson.Gson
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.java.Java
+import io.ktor.client.request.forms.InputProvider
+import io.ktor.client.request.forms.MultiPartFormDataContent
+import io.ktor.client.request.forms.formData
+import io.ktor.client.request.post
+import io.ktor.client.request.setBody
+import io.ktor.client.statement.bodyAsText
+import io.ktor.http.Headers
+import io.ktor.http.HttpHeaders
+import io.ktor.utils.io.streams.asInput
+import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.io.FileInputStream
 import java.net.InetSocketAddress
+import java.net.URI
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.CountDownLatch
-import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
@@ -28,20 +40,21 @@ private const val TRACE_HTTP_PORT = 9001
  */
 open class ProfileOpener(
     private val shell: Shell,
+    private val traceUploadUrl: String? = null,
+    private val httpClient: HttpClient = HttpClient(Java),
 ) {
     /**
-     * Serves [trace] over http://127.0.0.1:9001/<filename> with CORS and no-cache headers,
+     * Serves [trace] over http://127.0.0.1:<port>/<filename> with CORS and no-cache headers,
      * opens the appropriate UI (derived from [format]) pointing to that URL, and blocks until
      * the UI fetches the file once.
      *
-     * @param customOrigin optional override for the UI origin (defaults per format)
+     * TODO: This code is unnecessarily complex, simplify it
      */
     open fun openProfile(
         packageName: String?,
         trace: Path,
         format: ProfilerFormat,
         profileViewerOverride: ProfileViewer? = null,
-        customOrigin: String? = null,
     ) {
         var file = trace.toFile().absoluteFile
         require(file.exists()) { "Trace not found: $file" }
@@ -71,20 +84,16 @@ open class ProfileOpener(
         val (resolvedOrigin, openUrlBuilder) =
             when (profileViewer) {
                 ProfileViewer.PERFETTO -> {
-                    val origin = customOrigin ?: "https://ui.perfetto.dev"
-                    val builder: (String) -> String = { filename ->
-                        "$origin/#!/?url=http://127.0.0.1:$TRACE_HTTP_PORT/$filename&referrer=open_trace_in_ui"
+                    val origin = "https://ui.perfetto.dev"
+                    val builder: (String) -> String = { fileName ->
+                        "$origin/#!/?url=$fileName&referrer=open_trace_in_ui"
                     }
                     origin to builder
                 }
                 ProfileViewer.FIREFOX -> {
-                    val origin = customOrigin ?: "https://profiler.firefox.com"
-                    val builder: (String) -> String = { filename ->
-                        val encoded =
-                            URLEncoder.encode(
-                                "http://localhost:$TRACE_HTTP_PORT/$filename",
-                                StandardCharsets.UTF_8,
-                            )
+                    val origin = "https://profiler.firefox.com"
+                    val builder: (String) -> String = { fileName ->
+                        val encoded = URLEncoder.encode(fileName, StandardCharsets.UTF_8)
                         "$origin/from-url/$encoded"
                     }
                     origin to builder
@@ -95,9 +104,16 @@ open class ProfileOpener(
                 }
             }
 
-        val server = HttpServer.create(InetSocketAddress("127.0.0.1", TRACE_HTTP_PORT), 0)
+        val uploadedTraceUrl = maybeUploadTrace(file)
+        if (uploadedTraceUrl != null && profileViewer == ProfileViewer.FIREFOX) {
+            shell.open(openUrlBuilder(uploadedTraceUrl))
+            return
+        }
+
         val filename = file.name
         val requested = CountDownLatch(1)
+
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", TRACE_HTTP_PORT), 0)
 
         server.createContext("/") { exchange ->
             try {
@@ -110,17 +126,17 @@ open class ProfileOpener(
             }
         }
 
-        server.executor = Executors.newCachedThreadPool()
+        val executor = Executors.newCachedThreadPool().also { server.executor = it }
         server.start()
 
-        shell.open(openUrlBuilder(filename))
+        shell.open(openUrlBuilder("http://127.0.0.1:${server!!.address.port}/$filename"))
 
         try {
             // Wait until the first successful GET of the exact filename.
             requested.await(2, TimeUnit.MINUTES)
         } finally {
             server.stop(0)
-            (server.executor as? ExecutorService)?.shutdownNow()
+            executor.shutdownNow()
         }
     }
 
@@ -162,6 +178,43 @@ open class ProfileOpener(
             val b1 = input.read()
             val b2 = input.read()
             return b1 == 0x1F && b2 == 0x8B
+        }
+    }
+
+    private data class TraceUploadResponse(
+        val id: String,
+    )
+
+    private fun maybeUploadTrace(file: File): String? {
+        val uploadEndpoint = traceUploadUrl ?: return null
+        val responseBody =
+            runBlocking {
+                httpClient
+                    .post(uploadEndpoint) {
+                        setBody(
+                            MultiPartFormDataContent(
+                                formData {
+                                    append(
+                                        "file",
+                                        InputProvider { file.inputStream().asInput() },
+                                        Headers.build {
+                                            append(HttpHeaders.ContentType, "application/octet-stream")
+                                            append(
+                                                HttpHeaders.ContentDisposition,
+                                                "form-data; name=\"file\"; filename=\"${file.name}\"",
+                                            )
+                                        },
+                                    )
+                                },
+                            ),
+                        )
+                    }.bodyAsText()
+            }
+
+        val id = Gson().fromJson(responseBody, TraceUploadResponse::class.java).id
+
+        return URI.create(uploadEndpoint).resolve("./").resolve(id).toString().also {
+            println("Trace uploaded to $it")
         }
     }
 }

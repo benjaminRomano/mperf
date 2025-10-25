@@ -170,15 +170,26 @@ See the [CLI reference](docs/cli.md) for additional options, such as targeting a
 
 ## Configuration
 
-On first run, a config file is created at `~/.mperf/config.yml` with defaults. You can set your app package and a default instrumentation runner:
+On first run, `~/.mperf/config.yml` is created. The following keys are supported:
+
+| Field | Default | Description                                                                                             |
+| --- | --- |---------------------------------------------------------------------------------------------------------|
+| `android.package` | _unset_ | Default Android application ID for `android start / collect`; avoids `-p/--package`.                    |
+| `android.instrumentationRunner` | _unset_ | Default instrumentation runner for Macrobenchmark collection; avoids `-i/--instrumentation`.            |
+| `ios.bundleIdentifier` | _unset_ | Preferred bundle identifier for `ios start`; avoids `-b/--bundle`.                                      |
+| `ios.deviceId` | _unset_ | Default iOS device/simulator UDID when no `--device` is provided.                                       |
+| `traceUploadUrl` | _unset_ | HTTPS endpoint where collected traces are uploaded (multipart `POST` returning `{"id":"<string>"}`), enabling shareable performance data. |
+
+Example:
 
 ```yaml
 android:
   package: com.example.app
   instrumentationRunner: com.example.macrobenchmark/androidx.test.runner.AndroidJUnitRunner
+ios:
+  bundleIdentifier: com.example.app
+traceUploadUrl: https://myserver.com/trace
 ```
-
-With this in place, you can omit `-p/--package` and `-i/--instrumentation` in most commands.
 
 ## Development
 
