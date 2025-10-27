@@ -42,6 +42,7 @@ private const val TRACE_HTTP_PORT = 9001
 open class ProfileOpener(
     private val shell: Shell,
     private val traceHostUrl: String? = null,
+    private val perfettoUrl: String? = null,
     private val httpClient: HttpClient = HttpClient(Java),
 ) {
     /**
@@ -85,10 +86,12 @@ open class ProfileOpener(
         val (resolvedOrigin, openUrlBuilder) =
             when (profileViewer) {
                 ProfileViewer.PERFETTO -> {
-                    val origin = "https://ui.perfetto.dev"
-                    val builder: (String) -> String = { fileName ->
-                        "$origin/#!/?url=$fileName&referrer=open_trace_in_ui"
-                    }
+                    val origin = (perfettoUrl ?: "https://ui.perfetto.dev").trimEnd('/')
+                    val builder: (String) -> String =
+                        { traceLocation ->
+                            val encoded = URLEncoder.encode(traceLocation, StandardCharsets.UTF_8)
+                            "$origin/#!/?url=$encoded&referrer=open_trace_in_ui"
+                        }
                     origin to builder
                 }
                 ProfileViewer.FIREFOX -> {
@@ -105,10 +108,17 @@ open class ProfileOpener(
                 }
             }
 
-        val uploadedTraceUrl = maybeUploadTrace(file)
-        if (uploadedTraceUrl != null && profileViewer == ProfileViewer.FIREFOX) {
-            shell.open(openUrlBuilder(uploadedTraceUrl))
-            return
+        // If the trace was successfully uploaded to trace hosting service open it using url; otherwise,
+        // fallback to loading local file into profile viewer using local web server
+        maybeUploadTrace(file)?.let {
+            // Note: A custom perfetto instance is required to circumvent CSPs
+            // Ref: https://perfetto.dev/docs/visualization/deep-linking-to-perfetto-ui#why-can-39-t-i-just-pass-a-url-
+            if (profileViewer == ProfileViewer.FIREFOX || profileViewer == ProfileViewer.PERFETTO && perfettoUrl != null) {
+                val shareableUrl = openUrlBuilder(it)
+                println("Shareable URL: $shareableUrl")
+                shell.open(shareableUrl)
+                return
+            }
         }
 
         val filename = file.name
@@ -119,7 +129,7 @@ open class ProfileOpener(
         server.createContext("/") { exchange ->
             try {
                 when (exchange.requestMethod.uppercase()) {
-                    "GET" -> handleGet(exchange, file, filename, resolvedOrigin, requested)
+                    "GET" -> handleGet(exchange, file, filename, requested)
                     else -> sendNotFound(exchange)
                 }
             } finally {
@@ -145,7 +155,6 @@ open class ProfileOpener(
         exchange: HttpExchange,
         file: File,
         expectedName: String,
-        allowOrigin: String,
         requested: CountDownLatch,
     ) {
         // Only serve /<expectedName>
@@ -156,7 +165,7 @@ open class ProfileOpener(
 
         // Headers
         val headers = exchange.responseHeaders
-        headers.add("Access-Control-Allow-Origin", allowOrigin)
+        headers.add("Access-Control-Allow-Origin", "*")
         headers.add("Cache-Control", "no-cache")
 
         val bytes = Files.readAllBytes(file.toPath())
