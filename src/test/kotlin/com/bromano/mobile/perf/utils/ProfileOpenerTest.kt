@@ -187,7 +187,10 @@ class ProfileOpenerTest {
                             exchange.responseBody.use { it.write(bytes) }
                         }
                         "GET" -> {
-                            val path = exchange.requestURI.path.removePrefix("/trace/").ifEmpty { null }
+                            val path =
+                                exchange.requestURI.path
+                                    .removePrefix("/trace/")
+                                    .ifEmpty { null }
                             val bytes = path?.let { uploads[it] }
                             if (bytes != null) {
                                 exchange.sendResponseHeaders(200, bytes.size.toLong())
