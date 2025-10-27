@@ -22,7 +22,11 @@ class ProfileOpenerTest {
             val idx = url.indexOf("url=")
             require(idx >= 0) { "expected url param in $url" }
             val encoded = url.substring(idx + 4)
-            val target = encoded.substringBefore('&')
+            val target =
+                URLDecoder.decode(
+                    encoded.substringBefore('&'),
+                    StandardCharsets.UTF_8,
+                )
             URI(target).toURL().openStream().use { it.readAllBytes() }
         }
     }
@@ -159,6 +163,74 @@ class ProfileOpenerTest {
 
             val bodyString = String(receivedBodies.single(), StandardCharsets.UTF_8)
             assertTrue(bodyString.contains("perfetto-upload"), "uploaded body should include trace contents")
+        } finally {
+            server.stop(0)
+        }
+    }
+
+    @Test
+    fun `openTrace PERFETTO uses perfettoUrl when configured`() {
+        val tmp: Path = createTempFile("trace", ".perfetto-trace")
+        Files.writeString(tmp, "perfetto-remote")
+
+        val uploads = mutableMapOf<String, ByteArray>()
+        val server =
+            HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
+                createContext("/trace") { exchange ->
+                    when (exchange.requestMethod.uppercase()) {
+                        "POST" -> {
+                            val body = exchange.requestBody.readAllBytes()
+                            uploads["remote123"] = body
+                            val response = """{"id":"remote123"}"""
+                            val bytes = response.toByteArray(StandardCharsets.UTF_8)
+                            exchange.sendResponseHeaders(200, bytes.size.toLong())
+                            exchange.responseBody.use { it.write(bytes) }
+                        }
+                        "GET" -> {
+                            val path =
+                                exchange.requestURI.path
+                                    .removePrefix("/trace/")
+                                    .ifEmpty { null }
+                            val bytes = path?.let { uploads[it] }
+                            if (bytes != null) {
+                                exchange.sendResponseHeaders(200, bytes.size.toLong())
+                                exchange.responseBody.use { it.write(bytes) }
+                            } else {
+                                exchange.sendResponseHeaders(404, -1)
+                            }
+                        }
+                        else -> exchange.sendResponseHeaders(405, -1)
+                    }
+                    exchange.close()
+                }
+            }
+        server.start()
+
+        try {
+            val openedUrls = mutableListOf<String>()
+            val shell =
+                object : FakeShell() {
+                    override fun open(url: String) {
+                        openedUrls += url
+                        super.open(url)
+                    }
+                }
+            val uploadUrl = "http://127.0.0.1:${server.address.port}/trace"
+            val customPerfettoUrl = "https://perfetto.internal.example.com"
+            val opener = ProfileOpener(shell, uploadUrl, customPerfettoUrl)
+
+            assertTimeoutPreemptively(Duration.ofSeconds(5)) {
+                opener.openProfile("test", tmp, ProfilerFormat.PERFETTO)
+            }
+
+            assertEquals(1, openedUrls.size, "expected single open call to perfettoUrl")
+            val opened = openedUrls.first()
+            assertTrue(opened.startsWith("$customPerfettoUrl/#!/"), "should deep link into custom perfetto instance")
+
+            val uploadedBody = uploads["remote123"]
+            requireNotNull(uploadedBody) { "expected upload to succeed" }
+            val bodyString = String(uploadedBody, StandardCharsets.UTF_8)
+            assertTrue(bodyString.contains("perfetto-remote"), "uploaded body should include trace contents")
         } finally {
             server.stop(0)
         }

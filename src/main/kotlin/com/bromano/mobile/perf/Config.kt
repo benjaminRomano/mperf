@@ -32,6 +32,13 @@ data class Config(
      */
     @SerialName("traceHostUrl")
     val traceHostUrl: String? = null,
+    /**
+     * Optional Perfetto UI base URL used when opening traces (must support url query param).
+     *
+     * Example: https://perfetto.mycompany.com
+     */
+    @SerialName("perfettoUrl")
+    val perfettoUrl: String? = null,
 )
 
 @Serializable

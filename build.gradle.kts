@@ -32,6 +32,8 @@ dependencies {
     implementation("io.ktor:ktor-client-core:3.3.1")
     implementation("io.ktor:ktor-client-java:3.3.1")
 
+    runtimeOnly("org.slf4j:slf4j-nop:2.0.16")
+
     // Testing dependencies
     testImplementation(kotlin("test"))
     testImplementation("org.junit.jupiter:junit-jupiter:5.13.4")

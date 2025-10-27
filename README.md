@@ -172,13 +172,14 @@ See the [CLI reference](docs/cli.md) for additional options, such as targeting a
 
 On first run, `~/.mperf/config.yml` is created. The following keys are supported:
 
-| Field                           | Default | Description                                                                                                                                          |
-| ------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `android.package`               | _unset_ | Default Android application ID for `android start / collect`; avoids `-p/--package`.                                                                 |
-| `android.instrumentationRunner` | _unset_ | Default instrumentation runner for Macrobenchmark collection; avoids `-i/--instrumentation`.                                                         |
-| `ios.bundleIdentifier`          | _unset_ | Preferred bundle identifier for `ios start`; avoids `-b/--bundle`.                                                                                   |
-| `ios.deviceId`                  | _unset_ | Default iOS device/simulator UDID when no `--device` is provided.                                                                                    |
-| `traceHostUrl`                  | _unset_ | HTTP endpoint handling multipart `POST /trace` uploads and `GET /trace/<id>` downloads from the same base path, enabling shareable performance data. |
+| Field                           | Default | Description                                                                                                                                              |
+| ------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `android.package`               | _unset_ | Default Android application ID for `android start / collect`; avoids `-p/--package`.                                                                     |
+| `android.instrumentationRunner` | _unset_ | Default instrumentation runner for Macrobenchmark collection; avoids `-i/--instrumentation`.                                                             |
+| `ios.bundleIdentifier`          | _unset_ | Preferred bundle identifier for `ios start`; avoids `-b/--bundle`.                                                                                       |
+| `ios.deviceId`                  | _unset_ | Default iOS device/simulator UDID when no `--device` is provided.                                                                                        |
+| `traceHostUrl`                  | _unset_ | HTTP endpoint handling multipart `POST /trace` uploads and `GET /trace/<id>` downloads from the same base path, enabling shareable performance data.     |
+| `perfettoUrl`                   | _unset_ | Base URL (for example `https://perfetto.example.com`) of a self-hosted Perfetto UI used when deep-linking uploaded traces; bypasses Perfetto CSP limits. |
 
 Example:
 
@@ -189,6 +190,7 @@ android:
 ios:
   bundleIdentifier: com.example.app
 traceHostUrl: https://myserver.com/trace
+perfettoUrl: https://perfetto.example.com
 ```
 
 ### Trace Hosting
@@ -208,6 +210,10 @@ This helper service persists uploads to `/tmp/mperf` and exposes the same shape 
 - `GET /trace/<id>` streaming the file back with permissive CORS headers so Firefox Profiler can fetch it directly.
 
 Point `traceHostUrl` to `http://127.0.0.1:8080/trace` to test trace uploading locally.
+
+#### Sharing Perfetto Traces
+
+To make uploaded traces open directly in Perfetto UI, configure `perfettoUrl` with the base URL of your self-hosted Perfetto instance. The official `https://ui.perfetto.dev` enforces a strict [Content Security Policy](https://perfetto.dev/docs/visualization/deep-linking-to-perfetto-ui#why-can-39-t-i-just-pass-a-url-) that blocks downloads from arbitrary origins, so a custom host is required for shared URLs to load successfully. A GitHub Pages reference setup with CSP modified can be found [here](https://github.com/benjaminRomano/perfetto).
 
 ## Development
 
