@@ -133,7 +133,7 @@ aperf start -f simpleperf -p com.example.app \
 # View sampling profiler data in Perfetto instead
 aperf start -f simpleperf -p com.example.app --ui perfetto
 
-# Note: `mperf collect` does not support simpleperf due to Macrobenchmark limitations
+# Warning: `aperf collect -f simpleperf ...` currently requires additional Macrobenchmark wiring, which is not yet implemented in this repo.
 ```
 
 ### ART Method Tracing
@@ -145,6 +145,8 @@ aperf start -f method -p com.example.app
 aperf start -p com.example.app -f method --ui perfetto
 
 # NOTE: Due to Macrobenchmark limitations, the number of iterations specified in `measureRepeat(...)` will be performed before the method trace is collected.
+# To mitigate this, adjust the iteration count when `InstrumentRegistry.getArguments().getString("mperf.methodTrace")?.trim()?.toBooleanStrictOrNull() == "true"`
+# so the method trace completes faster.
 aperf collect -p com.example.app -f method -t SomeBenchmark#case
 ```
 

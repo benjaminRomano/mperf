@@ -5,6 +5,7 @@ import com.bromano.mobile.perf.profilers.Profiler
 import com.bromano.mobile.perf.utils.Adb
 import com.bromano.mobile.perf.utils.Logger
 import com.bromano.mobile.perf.utils.Shell
+import com.github.ajalt.clikt.core.PrintMessage
 import java.io.File
 import java.io.FileOutputStream
 import java.net.URI
@@ -218,5 +219,29 @@ class SimpleperfProfiler(
         instrumentationRunner: String,
         testCase: String,
         output: Path,
-    ): Unit = throw NotImplementedError("Currently unsupported due to Macrobenchmark limitations")
+    ) {
+        Logger.info("Running performance test: $testCase")
+
+        adb.shell(
+            buildString {
+                append("am instrument -w -r ")
+                append("-e class \"$testCase\" ")
+                append("-e androidx.benchmark.suppressErrors \"EMULATOR\" ")
+                append("-e mperf.simpleperf true ")
+                append("-e mperf.simpleperfArgs \"'${options.simpleperfArgs}'\" ")
+                append(instrumentationRunner)
+            },
+        )
+
+        Logger.info("Test complete. Pulling trace...")
+
+        val outputDir = adb.getDirUsableByAppAndShell(instrumentationRunner.substringBefore("/"))
+        val perfData = createTempFile("tmp", "data")
+        val trace =
+            adb.ls(outputDir).firstOrNull { it.contains("perf.data") }
+                ?: throw PrintMessage("No simpleperf data found by instrumentation test in $outputDir", printError = true)
+
+        adb.pull("$outputDir$trace", perfData.toString())
+        convertToGecko(options, perfData, output)
+    }
 }

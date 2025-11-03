@@ -81,6 +81,7 @@ class MethodProfilerTest {
             "am instrument -w -r -e class \"$testCase\" " +
                 "-e androidx.benchmark.profiling.mode MethodTracing " +
                 "-e androidx.benchmark.suppressErrors \"EMULATOR\" " +
+                "-e mperf.methodTrace true " +
                 instr
 
         verify(adb).shell(eq(expectedCmd), any(), any())
