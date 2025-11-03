@@ -65,12 +65,6 @@ class MethodProfiler(
         testCase: String,
         output: Path,
     ) {
-        // TODO: File Macrobenchmark feature request to make iterations parameterizable through instrumention args
-        Logger.warning(
-            "NOTE: Due to Macrobenchmark limitations, method tracing must perform the number " +
-                "of iterations specified in the test case before collecting a Method Trace",
-        )
-
         Logger.info("Running performance test: $testCase")
 
         adb.shell(
@@ -79,8 +73,8 @@ class MethodProfiler(
                 append("-e class \"$testCase\" ")
                 // Only perform a single iteration
                 append("-e androidx.benchmark.profiling.mode MethodTracing ")
-                // For method tracing, running on emulators doesn't matter since the latencies are already biased.
                 append("-e androidx.benchmark.suppressErrors \"EMULATOR\" ")
+                append("-e mperf.methodTrace true ")
                 append(instrumentationRunner)
             },
         )
