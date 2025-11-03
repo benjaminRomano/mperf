@@ -237,7 +237,8 @@ class SimpleperfProfiler(
 
         val outputDir = adb.getDirUsableByAppAndShell(instrumentationRunner.substringBefore("/"))
         val perfData = createTempFile("tmp", "data")
-        val trace = adb.ls(outputDir).firstOrNull { it.contains("perf.data") }
+        val trace =
+            adb.ls(outputDir).firstOrNull { it.contains("perf.data") }
                 ?: throw PrintMessage("No simpleperf data found by instrumentation test in $outputDir", printError = true)
 
         adb.pull("$outputDir$trace", perfData.toString())
