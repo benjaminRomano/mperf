@@ -5,29 +5,31 @@ import com.bromano.mobile.perf.profilers.Profiler
 import com.bromano.mobile.perf.utils.Adb
 import com.bromano.mobile.perf.utils.Logger
 import com.bromano.mobile.perf.utils.Shell
+import com.bromano.mobile.perf.utils.downloadVerified
 import com.github.ajalt.clikt.core.PrintMessage
-import java.io.FileOutputStream
-import java.net.URI
-import java.nio.channels.Channels
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 
 private const val TRACEBOX_PATH = "/data/local/tmp/tracebox"
+private const val PERFETTO_TRACEBOX_VERSION = "v54.0"
+
+private data class TraceboxArtifact(
+    val url: String,
+    val sha256: String,
+)
 
 class PerfettoProfiler(
     val shell: Shell,
     val adb: Adb,
     val perfettoOptions: PerfettoOptions,
-    private val awaitStop: () -> Unit = { readln() },
+    private val awaitStop: () -> Unit = { readlnOrNull() },
 ) : Profiler {
     override fun execute(
         packageName: String,
         output: Path,
     ) {
-        // TODO: Always sideload latest Perfetto version
-        // Right now, just sideloading current perfetto version (as of time of writing) onto older devices
-        // that do not have Perfetto with adequate capabilities or not pre-installed.
+        // Older devices rely on a sideloaded tracebox to pick up newer tracing capabilities.
         var perfettoBinary = "perfetto"
 
         val fileOnDevice =
@@ -131,25 +133,30 @@ private fun sideloadPerfetto(adb: Adb) {
         return
     }
 
-    // TODO: Find a way to ensure we are sideloading latest available version
-    Logger.info("Sideloading Perfetto v51.2 onto device")
+    Logger.info("Sideloading Perfetto $PERFETTO_TRACEBOX_VERSION onto device")
 
-    val binaryUrls =
+    val binaryArtifacts =
         mapOf(
-            "arm64-v8a" to "https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v51.2/android-arm64/tracebox",
-            "armeabi-v7a" to "https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v51.2/android-arm/tracebox",
-            "x86_64" to "https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v51.2/android-x64/tracebox",
+            "arm64-v8a" to
+                TraceboxArtifact(
+                    "https://commondatastorage.googleapis.com/perfetto-luci-artifacts/$PERFETTO_TRACEBOX_VERSION/android-arm64/tracebox",
+                    "a7c6a7df683ba098aef3d747ead69d25e937aaf3241d47d2d87f1d2826588768",
+                ),
+            "armeabi-v7a" to
+                TraceboxArtifact(
+                    "https://commondatastorage.googleapis.com/perfetto-luci-artifacts/$PERFETTO_TRACEBOX_VERSION/android-arm/tracebox",
+                    "41827319c6d258c264042d10b7f2584135fc65cc31fe60bc2413a45a0e8d6e42",
+                ),
+            "x86_64" to
+                TraceboxArtifact(
+                    "https://commondatastorage.googleapis.com/perfetto-luci-artifacts/$PERFETTO_TRACEBOX_VERSION/android-x64/tracebox",
+                    "193f686e290a6f4d53c7a06cea487f3c9ac5f8990d036a79713d6a088482ead8",
+                ),
         )
 
-    val binaryUrl = binaryUrls[adb.abi] ?: throw PrintMessage("Unexpected ABI: ${adb.abi}", printError = true)
+    val artifact = binaryArtifacts[adb.abi] ?: throw PrintMessage("Unexpected ABI: ${adb.abi}", printError = true)
     val traceboxPath = Files.createTempFile("tracebox", "")
-    URI(binaryUrl).toURL().openStream().use {
-        Channels.newChannel(it).use { rbc ->
-            FileOutputStream(traceboxPath.toString()).use { fos ->
-                fos.channel.transferFrom(rbc, 0, Long.MAX_VALUE)
-            }
-        }
-    }
+    downloadVerified(artifact.url, traceboxPath, artifact.sha256)
     adb.push(traceboxPath.toString(), TRACEBOX_PATH)
     adb.shell("chmod +x $TRACEBOX_PATH")
 }

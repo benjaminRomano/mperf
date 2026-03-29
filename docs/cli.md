@@ -24,6 +24,7 @@
 | Name | Description |
 |---|---|
 | start | Run iOS Instruments profiler over arbitrary app session |
+| convert | Convert Instruments Trace to Gecko Format (Firefox Profiler) |
 
 ### start
 **Options**
@@ -36,6 +37,18 @@
 | --out, -o | path | Output path for trace |
 | --bundle, -b | text | Bundle identifier (e.g. com.example.app) |
 | --device, -d | text | Device/Simulator UDID |
+| --ui | (PERFETTO\|FIREFOX\|INSTRUMENTS) | Profile viewer to open trace in |
+| --help, -h |  | Show this message and exit |
+
+### convert
+**Options**
+
+| Name(s) | Metavar | Description |
+|---|---|---|
+| --input, -i | path | Input Instruments Trace |
+| --app | text | Name of app (e.g. YourApp) |
+| --run | int | Which run within the trace file to analyze |
+| --output, -o | path | Output Path for gecko profile |
 | --ui | (PERFETTO\|FIREFOX\|INSTRUMENTS) | Profile viewer to open trace in |
 | --help, -h |  | Show this message and exit |
 

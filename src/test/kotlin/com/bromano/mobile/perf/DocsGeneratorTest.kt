@@ -66,4 +66,15 @@ class DocsGeneratorTest {
         )
         assertContains(md, "| --test, -t | text | Performance test to run |")
     }
+
+    @Test
+    fun `ios convert command is included in generated docs`() {
+        val md = DocsGenerator.generateCliDocsMarkdown()
+
+        assertContains(md, "## ios")
+        assertContains(md, "| convert | Convert Instruments Trace to Gecko Format (Firefox Profiler) |")
+        assertContains(md, "### convert")
+        assertContains(md, "| --input, -i | path | Input Instruments Trace |")
+        assertContains(md, "| --output, -o | path | Output Path for gecko profile |")
+    }
 }

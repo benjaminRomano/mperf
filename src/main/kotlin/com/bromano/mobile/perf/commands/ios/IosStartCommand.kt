@@ -15,7 +15,6 @@ import com.github.ajalt.clikt.parameters.types.path
 import java.nio.file.Paths
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
-import kotlin.io.path.absolute
 import kotlin.text.RegexOption
 
 class IosStartCommand(
@@ -47,7 +46,6 @@ class IosStartCommand(
                     )}.trace",
                 )
         finalOutputPath.parent.toFile().mkdirs()
-        println(finalOutputPath.absolute())
 
         val finalBundleIdentifier =
             bundleIdentifier ?: config.ios?.bundleIdentifier
@@ -62,6 +60,7 @@ class IosStartCommand(
 
         val finalDevice =
             device
+                ?: config.ios?.deviceId
                 ?: shell
                     .selectChoice(availableDevices, "Select a device/simulator:")
                     ?.let { selection ->

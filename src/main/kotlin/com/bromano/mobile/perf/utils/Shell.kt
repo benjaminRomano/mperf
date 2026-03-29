@@ -2,6 +2,7 @@ package com.bromano.mobile.perf.utils
 
 import java.io.InputStream
 import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 
 class ShellCommandException(
     command: String,
@@ -123,14 +124,20 @@ open class ShellExecutor : Shell {
     /**
      * Run given command with output returned as a string
      */
-    private fun runCommand(
+    private data class CommandStreams(
+        val stdout: String,
+        val stderr: String,
+    )
+
+    private fun stripTrailingLineTerminators(value: String): String = value.trimEnd('\r', '\n')
+
+    private fun executeCommand(
         command: String,
         ignoreErrors: Boolean = false,
         shell: Boolean = true,
         redirectOutput: ProcessBuilder.Redirect = ProcessBuilder.Redirect.INHERIT,
         redirectError: ProcessBuilder.Redirect = ProcessBuilder.Redirect.INHERIT,
-        outputParser: (InputStream) -> Unit,
-    ) {
+    ): CommandStreams {
         val cmds =
             if (shell) {
                 arrayOf(systemShell(), "-c", command)
@@ -146,18 +153,49 @@ open class ShellExecutor : Shell {
                 }.redirectInput(ProcessBuilder.Redirect.INHERIT)
                 .start()
 
-        proc.inputStream.use(outputParser)
+        val stdout =
+            if (redirectOutput == ProcessBuilder.Redirect.PIPE) {
+                StringBuilder()
+            } else {
+                null
+            }
+        val stderr =
+            if (redirectError == ProcessBuilder.Redirect.PIPE) {
+                StringBuilder()
+            } else {
+                null
+            }
+
+        fun streamReader(
+            input: InputStream,
+            destination: StringBuilder?,
+        ) = thread(start = true, isDaemon = true) {
+            input.bufferedReader().use { reader ->
+                val buffer = CharArray(DEFAULT_BUFFER_SIZE)
+                var charsRead = reader.read(buffer)
+                while (charsRead >= 0) {
+                    if (destination != null && charsRead > 0) {
+                        destination.append(buffer, 0, charsRead)
+                    }
+                    charsRead = reader.read(buffer)
+                }
+            }
+        }
+
+        val stdoutReader = streamReader(proc.inputStream, stdout)
+        val stderrReader = streamReader(proc.errorStream, stderr)
         val exitCode = proc.waitFor()
+        stdoutReader.join()
+        stderrReader.join()
 
         if (exitCode != 0 && !ignoreErrors) {
-            // Note: This is only populated with `ProcessBuilder.Redirect.PIPE`
-            val error =
-                proc.errorStream
-                    .bufferedReader()
-                    .readText()
-                    .trim()
-            throw ShellCommandException(command, exitCode, error)
+            throw ShellCommandException(command, exitCode, stripTrailingLineTerminators(stderr?.toString().orEmpty()))
         }
+
+        return CommandStreams(
+            stdout = stripTrailingLineTerminators(stdout?.toString().orEmpty()),
+            stderr = stripTrailingLineTerminators(stderr?.toString().orEmpty()),
+        )
     }
 
     override fun runCommand(
@@ -167,15 +205,12 @@ open class ShellExecutor : Shell {
         redirectOutput: ProcessBuilder.Redirect,
         redirectError: ProcessBuilder.Redirect,
     ): String {
-        var output = ""
-        runCommand(command, ignoreErrors, shell, redirectOutput, redirectError) { inputStream ->
-            output = inputStream.bufferedReader().readText().trim()
-        }
+        val streams = executeCommand(command, ignoreErrors, shell, redirectOutput, redirectError)
 
-        return if (redirectOutput == ProcessBuilder.Redirect.PIPE || redirectError == ProcessBuilder.Redirect.PIPE) {
-            output
-        } else {
-            ""
+        return when {
+            redirectOutput == ProcessBuilder.Redirect.PIPE -> streams.stdout
+            redirectError == ProcessBuilder.Redirect.PIPE -> streams.stderr
+            else -> ""
         }
     }
 
@@ -215,7 +250,11 @@ open class ShellExecutor : Shell {
         return output
             .lines()
             .drop(1)
-            .map { it.split("	").first() }
-            .filter { it.isNotBlank() }
+            .mapNotNull { line ->
+                val parts = line.split("\t")
+                val serial = parts.firstOrNull()?.trim().orEmpty()
+                val state = parts.getOrNull(1)?.trim().orEmpty()
+                serial.takeIf { it.isNotBlank() && state == "device" }
+            }
     }
 }

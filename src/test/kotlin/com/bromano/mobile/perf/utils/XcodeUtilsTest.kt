@@ -5,7 +5,6 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import java.io.ByteArrayInputStream
 
 class XcodeUtilsTest {
     private lateinit var shell: FakeShell
@@ -124,22 +123,20 @@ class XcodeUtilsTest {
         simulatorShell.newProcessBuilderHandler = { _ ->
             ProcessBuilder(listOf("bash", "-lc", "sleep 0.1"))
         }
-        val simulatorUtils = XcodeUtils(simulatorId, simulatorShell)
+        val simulatorUtils = XcodeUtils(simulatorId, simulatorShell, awaitStop = {})
 
-        withTemporaryInput("\n") {
-            simulatorUtils.record(
-                template = "Allocations",
-                instruments = listOf("allocations", "time-profiler"),
-                bundleIdentifier = "com.example.app",
-                outputPath = "/tmp/output.trace",
-            )
-        }
+        simulatorUtils.record(
+            template = "Allocations",
+            instruments = listOf("Core Animation", "Time Profiler"),
+            bundleIdentifier = "com.example.app",
+            outputPath = "/tmp/output.trace",
+        )
 
         val recordedCommand = simulatorShell.newProcessBuilderCommands.single()
-        assertTrue(recordedCommand.contains("--attach com.example.app"))
-        assertTrue(recordedCommand.contains("--template \"Allocations\""))
-        assertTrue(recordedCommand.contains("--instrument allocations"))
-        assertTrue(recordedCommand.contains("--instrument time-profiler"))
+        assertTrue(recordedCommand.contains("'--attach' 'com.example.app'"))
+        assertTrue(recordedCommand.contains("'--template' 'Allocations'"))
+        assertTrue(recordedCommand.contains("'--instrument' 'Core Animation'"))
+        assertTrue(recordedCommand.contains("'--instrument' 'Time Profiler'"))
         assertTrue(simulatorShell.startProcessCommands.single().startsWith("kill -INT"))
     }
 
@@ -152,32 +149,17 @@ class XcodeUtilsTest {
         simulatorShell.newProcessBuilderHandler = { _ ->
             ProcessBuilder(listOf("bash", "-lc", "sleep 0.1"))
         }
-        val simulatorUtils = XcodeUtils(simulatorId, simulatorShell)
+        val simulatorUtils = XcodeUtils(simulatorId, simulatorShell, awaitStop = {})
 
-        withTemporaryInput("\n") {
-            simulatorUtils.record(
-                template = "Time Profiler",
-                instruments = emptyList(),
-                bundleIdentifier = "com.example.app",
-                outputPath = "/tmp/output.trace",
-            )
-        }
+        simulatorUtils.record(
+            template = "Time Profiler",
+            instruments = emptyList(),
+            bundleIdentifier = "com.example.app",
+            outputPath = "/tmp/output.trace",
+        )
 
         val recordedCommand = simulatorShell.newProcessBuilderCommands.single()
-        assertTrue(recordedCommand.contains("--launch com.example.app"))
-        assertTrue(recordedCommand.contains("--output \"/tmp/output.trace\""))
-    }
-
-    private fun withTemporaryInput(
-        input: String,
-        block: () -> Unit,
-    ) {
-        val originalIn = System.`in`
-        System.setIn(ByteArrayInputStream(input.toByteArray()))
-        try {
-            block()
-        } finally {
-            System.setIn(originalIn)
-        }
+        assertTrue(recordedCommand.contains("'--launch' 'com.example.app'"))
+        assertTrue(recordedCommand.contains("'--output' '/tmp/output.trace'"))
     }
 }

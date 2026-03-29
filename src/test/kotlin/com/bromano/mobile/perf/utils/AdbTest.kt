@@ -234,10 +234,10 @@ class AdbTest {
 
     @Test
     fun `ls executes correct command`() {
-        whenever(shell.runCommand(any(), any())).thenReturn("file1 file2")
+        whenever(shell.runCommand(any(), any())).thenReturn("file1\nfile2\n")
         val files = adb.ls("/data/local/tmp")
         verify(shell).runCommand(
-            command = eq("adb -s test-device ls /data/local/tmp"),
+            command = eq("adb -s test-device shell ls -1 \"/data/local/tmp\""),
             ignoreErrors = any(),
         )
         assertEquals(listOf("file1", "file2"), files)

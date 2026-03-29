@@ -11,6 +11,7 @@ import perfetto.protos.ftraceConfig
 import perfetto.protos.processStatsConfig
 import perfetto.protos.sysStatsConfig
 import perfetto.protos.traceConfig
+import perfetto.protos.trackEventConfig
 
 val ATRACE_CATEGORIES =
     setOf(
@@ -67,7 +68,7 @@ fun createPerfettoConfig(
         buffers +=
             bufferConfig {
                 sizeKb = 4096
-                fillPolicy = FillPolicy.DISCARD
+                fillPolicy = FillPolicy.RING_BUFFER
             }
 
         dataSources +=
@@ -119,6 +120,15 @@ fun createPerfettoConfig(
             dataSource {
                 config =
                     dataSourceConfig {
+                        name = "android.packages_list"
+                        targetBuffer = 1
+                    }
+            }
+
+        dataSources +=
+            dataSource {
+                config =
+                    dataSourceConfig {
                         name = "android.surfaceflinger.frametimeline"
                     }
             }
@@ -134,6 +144,22 @@ fun createPerfettoConfig(
                                 collectPowerRails = true
                                 collectEnergyEstimationBreakdown = true
                             }
+                    }
+            }
+
+        dataSources +=
+            dataSource {
+                config =
+                    dataSourceConfig {
+                        name = "android.gpu.memory"
+                    }
+            }
+
+        dataSources +=
+            dataSource {
+                config =
+                    dataSourceConfig {
+                        name = "android.surfaceflinger.frame"
                     }
             }
 
@@ -165,6 +191,30 @@ fun createPerfettoConfig(
                             processStatsConfig {
                                 scanAllProcessesOnStart = true
                                 procStatsPollMs = 1000
+                            }
+                    }
+            }
+
+        dataSources +=
+            dataSource {
+                config =
+                    dataSourceConfig {
+                        name = "linux.system_info"
+                        targetBuffer = 1
+                    }
+            }
+
+        dataSources +=
+            dataSource {
+                config =
+                    dataSourceConfig {
+                        name = "track_event"
+                        trackEventConfig =
+                            trackEventConfig {
+                                // androidx.tracing currently records SDK events in the rendering
+                                // category, including coroutine-aware spans in 2.x.
+                                enabledCategories.add("rendering")
+                                disabledCategories.add("*")
                             }
                     }
             }

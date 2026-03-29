@@ -133,7 +133,9 @@ aperf start -f simpleperf -p com.example.app \
 # View sampling profiler data in Perfetto instead
 aperf start -f simpleperf -p com.example.app --ui perfetto
 
-# Warning: `aperf collect -f simpleperf ...` currently requires additional Macrobenchmark wiring, which is not yet implemented in this repo.
+# Macrobenchmark collection uses AndroidX stack sampling and emits a Perfetto trace.
+# `collect -f simpleperf` therefore opens in Perfetto by default.
+aperf collect -f simpleperf -p com.example.app -t SomeBenchmark#case
 ```
 
 ### ART Method Tracing

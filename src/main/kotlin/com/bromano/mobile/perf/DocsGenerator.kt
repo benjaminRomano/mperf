@@ -1,21 +1,15 @@
 package com.bromano.mobile.perf
 
-import com.bromano.mobile.perf.commands.android.AndroidCollectCommand
-import com.bromano.mobile.perf.commands.android.AndroidCommand
-import com.bromano.mobile.perf.commands.android.AndroidStartCommand
-import com.bromano.mobile.perf.commands.ios.IosCommand
-import com.bromano.mobile.perf.commands.ios.IosStartCommand
 import com.bromano.mobile.perf.profilers.ProfilerExecutor
+import com.bromano.mobile.perf.utils.ProfileOpener
 import com.bromano.mobile.perf.utils.ShellExecutor
 import com.github.ajalt.clikt.core.BaseCliktCommand
 import com.github.ajalt.clikt.core.parse
-import com.github.ajalt.clikt.core.subcommands
 import com.github.ajalt.clikt.output.HelpFormatter
 import com.github.ajalt.clikt.output.MordantMarkdownHelpFormatter
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
-import kotlin.io.path.readText
 
 /** Entry point to generate docs to docs/cli.md */
 object DocsGenerator {
@@ -31,9 +25,7 @@ object DocsGenerator {
      */
     fun generateCliDocsMarkdown(): String {
         // Build the CLI tree without performing any side effects
-        val config =
-            com.charleskorn.kaml.Yaml.default
-                .decodeFromString(Config.serializer(), getConfig().readText())
+        val config = readConfig()
         val shell = ShellExecutor()
         val noop =
             object : ProfilerExecutor {
@@ -58,17 +50,7 @@ object DocsGenerator {
                 ) = Unit
             }
 
-        val root =
-            MobilePerfCommand()
-                .subcommands(
-                    IosCommand().subcommands(
-                        IosStartCommand(shell, config, noop),
-                    ),
-                    AndroidCommand().subcommands(
-                        AndroidStartCommand(shell, config, noop),
-                        AndroidCollectCommand(shell, config, noop),
-                    ),
-                )
+        val root = createRootCommand(shell, config, noop, ProfileOpener(shell))
 
         // Switch help formatter to Markdown
         root.configureContext { helpFormatter = { ctx -> MordantMarkdownHelpFormatter(ctx) } }

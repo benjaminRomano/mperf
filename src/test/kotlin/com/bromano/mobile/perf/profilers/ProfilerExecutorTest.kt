@@ -27,6 +27,7 @@ class ProfilerExecutorTest {
         var opened = false
         var capturedPkg = ""
         var capturedOut: Path? = null
+        var capturedViewer: ProfileViewer? = null
 
         val factories: Map<ProfilerFormat, (Shell, String, ProfilerOptionGroup) -> Profiler> =
             mapOf(
@@ -65,6 +66,7 @@ class ProfilerExecutorTest {
                     profileViewerOverride: ProfileViewer?,
                 ) {
                     opened = true
+                    capturedViewer = profileViewerOverride
                     assertTrue(Files.exists(trace))
                     assertEquals(ProfilerFormat.PERFETTO, format)
                 }
@@ -74,12 +76,13 @@ class ProfilerExecutorTest {
         val opts: ProfilerOptionGroup = PerfettoOptions()
 
         val executor = ProfilerExecutorImpl(factories, openerFactory(shell))
-        executor.execute(opts, shell, device, pkg, out)
+        executor.execute(opts, shell, device, pkg, out, ProfileViewer.FIREFOX)
 
         assertTrue(collected)
         assertTrue(opened)
         assertEquals(pkg, capturedPkg)
         assertEquals(out, capturedOut)
+        assertEquals(ProfileViewer.FIREFOX, capturedViewer)
     }
 
     @Test
