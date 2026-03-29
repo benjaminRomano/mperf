@@ -26,9 +26,19 @@ class DefaultPerfettoConfigTest {
         assertEquals(2, cfg.buffersCount)
         assertEquals(65536, cfg.getBuffers(0).sizeKb)
         assertEquals(PerfettoConfig.TraceConfig.BufferConfig.FillPolicy.RING_BUFFER, cfg.getBuffers(0).fillPolicy)
+        assertEquals(PerfettoConfig.TraceConfig.BufferConfig.FillPolicy.RING_BUFFER, cfg.getBuffers(1).fillPolicy)
 
-        // dataSources: expect linux.ftrace + frametimeline + android.power + linux.sys_stats + linux.process_stats
-        assertTrue(cfg.dataSourcesCount >= 5)
+        val dataSourceNames = cfg.dataSourcesList.map { it.config.name }.toSet()
+        assertTrue("linux.ftrace" in dataSourceNames)
+        assertTrue("android.packages_list" in dataSourceNames)
+        assertTrue("android.surfaceflinger.frametimeline" in dataSourceNames)
+        assertTrue("android.power" in dataSourceNames)
+        assertTrue("android.gpu.memory" in dataSourceNames)
+        assertTrue("android.surfaceflinger.frame" in dataSourceNames)
+        assertTrue("linux.sys_stats" in dataSourceNames)
+        assertTrue("linux.process_stats" in dataSourceNames)
+        assertTrue("linux.system_info" in dataSourceNames)
+        assertTrue("track_event" in dataSourceNames)
 
         val ftrace = cfg.dataSourcesList.first { it.config.name == "linux.ftrace" }
         val atraceCfg = ftrace.config.ftraceConfig
@@ -42,5 +52,13 @@ class DefaultPerfettoConfigTest {
         // atraceApps include lmkd and package
         assertTrue(atraceCfg.atraceAppsList.contains("lmkd"))
         assertTrue(atraceCfg.atraceAppsList.contains("com.example.app"))
+
+        val trackEvent =
+            cfg.dataSourcesList
+                .first { it.config.name == "track_event" }
+                .config
+                .trackEventConfig
+        assertEquals(listOf("rendering"), trackEvent.enabledCategoriesList)
+        assertEquals(listOf("*"), trackEvent.disabledCategoriesList)
     }
 }

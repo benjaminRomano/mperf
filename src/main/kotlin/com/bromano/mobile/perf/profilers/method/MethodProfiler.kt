@@ -15,7 +15,7 @@ import java.nio.file.Path
  */
 class MethodProfiler(
     private val adb: Adb,
-    private val awaitStop: () -> Unit = { readln() },
+    private val awaitStop: () -> Unit = { readlnOrNull() },
 ) : Profiler {
     override fun execute(
         packageName: String,

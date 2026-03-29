@@ -88,6 +88,16 @@ class AndroidCollectCommand(
             shell.selectChoice(testCases, "Select a test case:")
                 ?: throw PrintMessage("Failed to find test case for instrumentation test runner: $finalInstrumentationRunner")
 
+        // Macrobenchmark stack sampling currently emits a Perfetto trace, even when collected via the
+        // simpleperf-backed profiling mode.
+        val finalProfileViewerOverride =
+            profileViewerOverride
+                ?: if (profilerOption.format == ProfilerFormat.SIMPLEPERF) {
+                    ProfileViewer.PERFETTO
+                } else {
+                    null
+                }
+
         executor.executeTest(
             profilerOption,
             shell,
@@ -96,7 +106,7 @@ class AndroidCollectCommand(
             finalInstrumentationRunner,
             finalTestCase,
             finalOutputPath,
-            profileViewerOverride,
+            finalProfileViewerOverride,
         )
     }
 }

@@ -6,6 +6,7 @@ import com.bromano.mobile.perf.commands.android.AndroidStartCommand
 import com.bromano.mobile.perf.commands.ios.ConvertCommand
 import com.bromano.mobile.perf.commands.ios.IosCommand
 import com.bromano.mobile.perf.commands.ios.IosStartCommand
+import com.bromano.mobile.perf.profilers.ProfilerExecutor
 import com.bromano.mobile.perf.profilers.ProfilerExecutorImpl
 import com.bromano.mobile.perf.profilers.instruments.InstrumentsProfiler
 import com.bromano.mobile.perf.profilers.instruments.InstrumentsProfilerOptions
@@ -14,16 +15,15 @@ import com.bromano.mobile.perf.profilers.perfetto.PerfettoProfiler
 import com.bromano.mobile.perf.profilers.simpleperf.SimpleperfProfiler
 import com.bromano.mobile.perf.utils.Adb
 import com.bromano.mobile.perf.utils.ProfileOpener
+import com.bromano.mobile.perf.utils.Shell
 import com.bromano.mobile.perf.utils.ShellExecutor
 import com.bromano.mobile.perf.utils.XcodeUtils
-import com.charleskorn.kaml.Yaml
 import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.core.Context
 import com.github.ajalt.clikt.core.main
 import com.github.ajalt.clikt.core.subcommands
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.java.Java
-import kotlin.io.path.readText
 
 class MobilePerfCommand : CliktCommand() {
     override fun help(context: Context) = "A CLI for mobile performance testing"
@@ -32,7 +32,7 @@ class MobilePerfCommand : CliktCommand() {
 }
 
 fun main(args: Array<String>) {
-    val config = Yaml.default.decodeFromString(Config.serializer(), getConfig().readText())
+    val config = readConfig()
     val shell = ShellExecutor()
     val httpClient = HttpClient(Java)
 
@@ -63,17 +63,7 @@ fun main(args: Array<String>) {
             profileOpener,
         )
 
-    MobilePerfCommand()
-        .subcommands(
-            IosCommand().subcommands(
-                IosStartCommand(shell, config, profilerExecutor),
-                ConvertCommand(profileOpener),
-            ),
-            AndroidCommand().subcommands(
-                AndroidStartCommand(shell, config, profilerExecutor),
-                AndroidCollectCommand(shell, config, profilerExecutor),
-            ),
-        ).main(args)
+    createRootCommand(shell, config, profilerExecutor, profileOpener).main(args)
 }
 
 /**
@@ -82,6 +72,23 @@ fun main(args: Array<String>) {
 fun runCli(args: String) {
     main(shlexSplit(args))
 }
+
+fun createRootCommand(
+    shell: Shell,
+    config: Config,
+    profilerExecutor: ProfilerExecutor,
+    profileOpener: ProfileOpener,
+) = MobilePerfCommand()
+    .subcommands(
+        IosCommand().subcommands(
+            IosStartCommand(shell, config, profilerExecutor),
+            ConvertCommand(profileOpener),
+        ),
+        AndroidCommand().subcommands(
+            AndroidStartCommand(shell, config, profilerExecutor),
+            AndroidCollectCommand(shell, config, profilerExecutor),
+        ),
+    )
 
 /**
  * Perform string splitting as shell would do

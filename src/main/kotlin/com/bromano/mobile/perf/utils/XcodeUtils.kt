@@ -4,6 +4,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import java.io.InputStream
 import java.util.concurrent.TimeUnit
 
 /**
@@ -12,8 +13,9 @@ import java.util.concurrent.TimeUnit
 class XcodeUtils(
     private val deviceId: String?,
     private val shell: Shell,
+    private val awaitStop: () -> Unit = { readlnOrNull() },
 ) {
-    private val deviceOpts = deviceId?.let { "--device $it" } ?: ""
+    private fun shellQuote(value: String): String = "'" + value.replace("'", "'\"'\"'") + "'"
 
     /**
      * Get list of available devices (both physical devices and simulators)
@@ -154,46 +156,52 @@ class XcodeUtils(
                 add("xctrace")
                 add("record")
                 add("--template")
-                add("\"$template\"")
-                if (!deviceOpts.isBlank()) {
-                    addAll(deviceOpts.split(" "))
+                add(template)
+                if (deviceId != null) {
+                    add("--device")
+                    add(deviceId)
                 }
                 add(if (isAppRunning(bundleIdentifier)) "--attach" else "--launch")
                 add(bundleIdentifier)
                 add("--no-prompt")
                 add("--output")
-                add("\"$outputPath\"")
+                add(outputPath)
                 instruments.forEach {
                     add("--instrument")
                     add(it)
                 }
-            }.joinToString(" ")
+            }.joinToString(" ") { shellQuote(it) }
 
         val process =
             shell
                 .newProcessBuilder(cmd)
+                .redirectErrorStream(true)
                 .redirectOutput(ProcessBuilder.Redirect.PIPE)
                 .start()
 
         // HACK: IntelliJ debug window doesn't support Ctrl-C, so replace with press any key to terminate.
         val inputProcessor =
             CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
-                process.inputStream.use {
-                    it.bufferedReader().useLines { lines ->
-                        lines.forEach { line ->
-                            if (line.contains("Ctrl-C to stop the recording")) {
-                                println("Press any key to end tracing...")
-                            } else {
-                                println(line)
-                            }
-                        }
+                process.inputStream.forwardToStdout()
+            }
+
+        awaitStop()
+        shell.startProcess("kill -INT ${process.pid()}")
+        shell.waitFor(process, 30, TimeUnit.SECONDS)
+        inputProcessor.cancel()
+    }
+
+    private fun InputStream.forwardToStdout() {
+        use {
+            it.bufferedReader().useLines { lines ->
+                lines.forEach { line ->
+                    if (line.contains("Ctrl-C to stop the recording")) {
+                        println("Press any key to end tracing...")
+                    } else {
+                        println(line)
                     }
                 }
             }
-
-        readln()
-        shell.startProcess("kill -INT ${process.pid()}")
-        process.waitFor(30, TimeUnit.SECONDS)
-        inputProcessor.cancel()
+        }
     }
 }

@@ -15,6 +15,7 @@ import org.mockito.kotlin.eq
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.verify
 import java.nio.file.Path
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class AndroidCollectCommandTest {
@@ -146,5 +147,62 @@ class AndroidCollectCommandTest {
         val cmd = AndroidCollectCommand(shell, Config(android = AndroidConfig(packageName = pkg)), executor)
         cmd.parse(listOf("-d", device, "-p", pkg, "-i", instr, "-t", "startup"))
         assertTrue(selected == expectedChoices[1])
+    }
+
+    @Test
+    fun `simpleperf collect defaults to perfetto viewer`() {
+        val device = "device-1"
+        val pkg = "com.example.app"
+        val instr = "com.example.app.test/androidx.test.runner.AndroidJUnitRunner"
+        val fqTest = "com.example.bench.MyBenchmark#startup"
+
+        val shell =
+            mock<Shell> {
+                on {
+                    runCommand(
+                        command = eq("adb -s $device shell am instrument -r -w -e log true -e logOnly true $instr"),
+                        ignoreErrors = any(),
+                    )
+                } doReturn (
+                    """
+                    INSTRUMENTATION_STATUS: class=com.example.bench.MyBenchmark
+                    INSTRUMENTATION_STATUS: test=startup
+                    INSTRUMENTATION_STATUS_CODE: 1
+                    INSTRUMENTATION_CODE: -1
+                    """.trimIndent()
+                )
+                on { selectChoice(eq(listOf(fqTest)), anyOrNull()) } doReturn fqTest
+            }
+
+        var viewerOverride: ProfileViewer? = null
+        val executor =
+            object : ProfilerExecutor {
+                override fun execute(
+                    profilerOptionGroup: ProfilerOptionGroup,
+                    shell: Shell,
+                    device: String,
+                    packageName: String,
+                    output: Path,
+                    profileViewerOverride: ProfileViewer?,
+                ) = Unit
+
+                override fun executeTest(
+                    profilerOptionGroup: ProfilerOptionGroup,
+                    shell: Shell,
+                    device: String,
+                    packageName: String,
+                    instrumentationPackageName: String,
+                    testCase: String,
+                    output: Path,
+                    profileViewerOverride: ProfileViewer?,
+                ) {
+                    viewerOverride = profileViewerOverride
+                }
+            }
+
+        val cmd = AndroidCollectCommand(shell, Config(android = AndroidConfig(packageName = pkg)), executor)
+        cmd.parse(listOf("-d", device, "-p", pkg, "-i", instr, "-t", fqTest, "-f", "simpleperf"))
+
+        assertEquals(ProfileViewer.PERFETTO, viewerOverride)
     }
 }

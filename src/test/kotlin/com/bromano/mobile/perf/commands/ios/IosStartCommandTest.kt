@@ -78,6 +78,32 @@ class IosStartCommandTest {
     }
 
     @Test
+    fun `command uses device id from config when not provided`() {
+        val configWithDevice =
+            Config(
+                ios =
+                    IosConfig(
+                        bundleIdentifier = "com.example.app",
+                        deviceId = "12345678-1234-1234-1234-123456789012",
+                    ),
+            )
+        val commandWithDevice = IosStartCommand(shell, configWithDevice, mockExecutor)
+
+        val result = commandWithDevice.test("")
+
+        assertEquals(0, result.statusCode)
+        assertEquals(0, shell.selectChoiceCallCount)
+        verify(mockExecutor).execute(
+            any(),
+            eq(shell),
+            eq("12345678-1234-1234-1234-123456789012"),
+            eq("com.example.app"),
+            any(),
+            eq(null),
+        )
+    }
+
+    @Test
     fun `command fails when no bundle identifier provided and none in config`() {
         val configWithoutBundle = Config(ios = null)
         val commandWithoutBundle = IosStartCommand(shell, configWithoutBundle, mockExecutor)

@@ -13,6 +13,7 @@ import org.junit.jupiter.api.assertThrows
 import org.mockito.kotlin.any
 import org.mockito.kotlin.argThat
 import org.mockito.kotlin.mock
+import org.mockito.kotlin.never
 import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
@@ -134,7 +135,7 @@ class SimpleperfProfilerTest {
                 },
                 any(),
             ),
-        ).thenReturn("e80b79d38160a9ec4d6cd8f06ab39e28  /data/local/tmp/simpleperf")
+        ).thenReturn("545d135f070494bba7b5fe4b09046682  /data/local/tmp/simpleperf")
 
         // pidof once, then blank to indicate shutdown
         whenever(
@@ -229,5 +230,62 @@ class SimpleperfProfilerTest {
         assertThrows<IllegalStateException> {
             collector.execute("com.example.app", output)
         }
+    }
+
+    @Test
+    fun `executeTest uses benchmark stack sampling and pulls perfetto trace`() {
+        whenever(
+            shell.runCommand(
+                argThat {
+                    contains("adb") &&
+                        contains("am instrument") &&
+                        contains("androidx.benchmark.profiling.mode StackSampling")
+                },
+                any(),
+            ),
+        ).thenReturn(
+            "INSTRUMENTATION_STATUS: additionalTestOutputFile_LoginBenchmark_loginByIntent_iter000=" +
+                "/storage/emulated/0/Android/media/com.example.macrobenchmark/" +
+                "LoginBenchmark_loginByIntent_iter000.perfetto-trace",
+        )
+
+        class OptsCmd4 : CliktCommand() {
+            lateinit var captured: com.bromano.mobile.perf.ProfilerOptionGroup
+            private val profiler by androidProfilerOptions()
+
+            override fun run() {
+                captured = profiler
+            }
+        }
+        val cmd = OptsCmd4()
+        cmd.parse(listOf("--format", "simpleperf"))
+        val options = cmd.captured as SimpleperfOptions
+        val collector = SimpleperfProfiler(shell, adb, options)
+        val output: Path = Files.createTempFile("macro-simpleperf", ".perfetto-trace")
+
+        collector.executeTest(
+            packageName = "com.example.macrobenchmark.target",
+            instrumentationRunner = "com.example.macrobenchmark/androidx.test.runner.AndroidJUnitRunner",
+            testCase = "com.example.macrobenchmark.benchmark.LoginBenchmark#loginByIntent",
+            output = output,
+        )
+
+        verify(shell).runCommand(
+            argThat {
+                contains("adb") &&
+                    contains("am instrument") &&
+                    contains("androidx.benchmark.profiling.mode StackSampling")
+            },
+            any(),
+        )
+        verify(shell).runCommand(
+            argThat {
+                contains("adb ") &&
+                    contains(" pull /storage/emulated/0/Android/media/com.example.macrobenchmark/") &&
+                    contains("LoginBenchmark_loginByIntent_iter000.perfetto-trace")
+            },
+            any(),
+        )
+        verify(shell, never()).runCommand(argThat { contains("python3") }, any())
     }
 }

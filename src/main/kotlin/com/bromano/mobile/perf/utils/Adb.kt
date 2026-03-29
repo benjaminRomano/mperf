@@ -168,7 +168,11 @@ class Adb(
         shell("rm${if (force) " -f" else ""} \"$path\"", ignoreErrors = ignoreErrors)
     }
 
-    fun ls(path: String): List<String> = runCommand("ls $path").split("\\s".toRegex())
+    fun ls(path: String): List<String> =
+        shell("ls -1 \"$path\"")
+            .lines()
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
 
     /**
      * Find all available instrumentation test runners.

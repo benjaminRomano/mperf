@@ -27,6 +27,11 @@ class ProfileOpenerTest {
                     encoded.substringBefore('&'),
                     StandardCharsets.UTF_8,
                 )
+            val statusUrl =
+                URI(target).let { traceUri ->
+                    URI(traceUri.scheme, traceUri.authority, "/status", null, null)
+                }
+            statusUrl.toURL().openStream().use { it.readAllBytes() }
             URI(target).toURL().openStream().use { it.readAllBytes() }
         }
     }

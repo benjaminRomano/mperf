@@ -5,12 +5,9 @@ import com.bromano.mobile.perf.profilers.Profiler
 import com.bromano.mobile.perf.utils.Adb
 import com.bromano.mobile.perf.utils.Logger
 import com.bromano.mobile.perf.utils.Shell
+import com.bromano.mobile.perf.utils.downloadVerified
 import com.github.ajalt.clikt.core.PrintMessage
 import java.io.File
-import java.io.FileOutputStream
-import java.net.URI
-import java.nio.channels.Channels
-import java.nio.file.Files
 import java.nio.file.Path
 import java.util.Base64
 import java.util.concurrent.TimeUnit
@@ -18,6 +15,17 @@ import kotlin.io.path.createTempFile
 import kotlin.io.path.exists
 
 private const val SIMPLEPERF_SIDELOAD_PATH = "/data/local/tmp/simpleperf"
+private const val SIMPLEPERF_PREBUILTS_COMMIT = "77a9d28fd775ac32868475335d5786fdf99a9b80"
+private const val SIMPLEPERF_SCRIPTS_ARCHIVE_COMMIT = "fc2494a2abd7ab21774d03deb09c1362bbb0bba8"
+private const val SIMPLEPERF_SCRIPTS_ARCHIVE_SHA256 = "fbb1228a74315941ef36c4510ba4b88726ea81fe29ee5e5e966b2ac85dd913c4"
+private const val BENCHMARK_STACK_SAMPLING_MODE = "StackSampling"
+private const val INSTRUMENTATION_ADDITIONAL_OUTPUT_PREFIX = "INSTRUMENTATION_STATUS: additionalTestOutputFile_"
+
+private data class SimpleperfBinaryInfo(
+    val url: String,
+    val md5: String,
+    val sha256: String,
+)
 
 /**
  * Collects a simpleperf profile using NDK simpleperf scripts (app_profiler.py).
@@ -30,7 +38,7 @@ class SimpleperfProfiler(
     private val shell: Shell,
     private val adb: Adb,
     private val options: SimpleperfOptions,
-    private val awaitStop: () -> Unit = { readln() },
+    private val awaitStop: () -> Unit = { readlnOrNull() },
     private val shutdownTimeoutMs: Long = TimeUnit.SECONDS.toMillis(60),
 ) : Profiler {
     override fun execute(
@@ -106,23 +114,26 @@ class SimpleperfProfiler(
      * Sideload latest copy of simpleperf to backport `--user-buffer-size` and any other bug fixes
      */
     private fun sideloadSimpleperf(adb: Adb) {
-        // https://android.googlesource.com/platform/prebuilts/simpleperf/+/a63e5b546388f4b947d1b310ab3d9bada63bb242
+        // https://android.googlesource.com/platform/prebuilts/simpleperf/+log/refs/heads/mirror-goog-main-prebuilts/bin/android/arm64/simpleperf
         val binaryInfoMap =
             mapOf(
                 "arm64-v8a" to
-                    Pair(
-                        "https://android.googlesource.com/platform/prebuilts/simpleperf/+/a63e5b546388f4b947d1b310ab3d9bada63bb242/bin/android/arm64/simpleperf?format=TEXT",
-                        "e80b79d38160a9ec4d6cd8f06ab39e28",
+                    SimpleperfBinaryInfo(
+                        "https://android.googlesource.com/platform/prebuilts/simpleperf/+/$SIMPLEPERF_PREBUILTS_COMMIT/bin/android/arm64/simpleperf?format=TEXT",
+                        "545d135f070494bba7b5fe4b09046682",
+                        "1cf95ed65cff9f6030f90b50dd0e2251725305d686af1b25a91eb51891074f76",
                     ),
                 "armeabi-v7a" to
-                    Pair(
-                        "https://android.googlesource.com/platform/prebuilts/simpleperf/+/a63e5b546388f4b947d1b310ab3d9bada63bb242/bin/android/arm/simpleperf?format=TEXT",
-                        "e3c0c494c2164cdf4f80f43774d84037",
+                    SimpleperfBinaryInfo(
+                        "https://android.googlesource.com/platform/prebuilts/simpleperf/+/$SIMPLEPERF_PREBUILTS_COMMIT/bin/android/arm/simpleperf?format=TEXT",
+                        "a3b40bbf6ff8d6e8b49facc41f96e890",
+                        "aba36e7925dfd586501bc112a4b7e113c64e5af51b3d8ec91e61797e7b3d9951",
                     ),
                 "x86_64" to
-                    Pair(
-                        "https://android.googlesource.com/platform/prebuilts/simpleperf/+/a63e5b546388f4b947d1b310ab3d9bada63bb242/bin/android/x86_64/simpleperf?format=TEXT",
-                        "44d9c3c8db54db8968dfb5e99fe0cdcf",
+                    SimpleperfBinaryInfo(
+                        "https://android.googlesource.com/platform/prebuilts/simpleperf/+/$SIMPLEPERF_PREBUILTS_COMMIT/bin/android/x86_64/simpleperf?format=TEXT",
+                        "0923414737427e2db3b8aa5ae29af9e0",
+                        "c35ac8e3ff043375396e5cf12ef825e4b4f76b6ed05a86d7ad8d89547ff5fad4",
                     ),
             )
 
@@ -130,7 +141,7 @@ class SimpleperfProfiler(
 
         // Check if already up-to-date before downloading and sideloading.
         if (adb.shell("ls /data/local/tmp").contains("simpleperf") &&
-            adb.shell("md5sum $SIMPLEPERF_SIDELOAD_PATH").split(" ")[0].trim() == binaryInfo.second
+            adb.shell("md5sum $SIMPLEPERF_SIDELOAD_PATH").split(" ")[0].trim() == binaryInfo.md5
         ) {
             return
         }
@@ -141,11 +152,9 @@ class SimpleperfProfiler(
                 deleteOnExit()
             }
 
-        // Download from AOSP which returns base64 when using ?format=TEXT, then decode before writing.
-        URI(binaryInfo.first).toURL().openStream().use { input ->
-            val encoded = input.readAllBytes()
-            val decoded = Base64.getDecoder().decode(encoded)
-            Files.write(tempFile.toPath(), decoded)
+        downloadVerified(binaryInfo.url, tempFile.toPath(), binaryInfo.sha256) { input ->
+            // googlesource ?format=TEXT endpoints return a base64-encoded file body.
+            Base64.getDecoder().decode(input.readAllBytes())
         }
 
         adb.push(tempFile.toString(), SIMPLEPERF_SIDELOAD_PATH)
@@ -192,21 +201,15 @@ class SimpleperfProfiler(
             return simpleperfHome
         }
 
-        val simpleperfArchive = "https://android.googlesource.com/platform/system/extras/+archive/refs/heads/main/simpleperf/scripts.tar.gz"
+        val simpleperfArchive =
+            "https://android.googlesource.com/platform/system/extras/+archive/$SIMPLEPERF_SCRIPTS_ARCHIVE_COMMIT/simpleperf/scripts.tar.gz"
         val tempFile =
             File.createTempFile("simpleperf.tar.gz", null).apply {
                 deleteOnExit()
             }
 
         Logger.info("Installing simpleperf scripts...")
-
-        URI(simpleperfArchive).toURL().openStream().use {
-            Channels.newChannel(it).use { rbc ->
-                FileOutputStream(tempFile).use { fos ->
-                    fos.channel.transferFrom(rbc, 0, Long.MAX_VALUE)
-                }
-            }
-        }
+        downloadVerified(simpleperfArchive, tempFile.toPath(), SIMPLEPERF_SCRIPTS_ARCHIVE_SHA256)
 
         simpleperfHome.toFile().mkdirs()
         shell.runCommand("tar -xzf $tempFile -C $simpleperfHome")
@@ -222,26 +225,36 @@ class SimpleperfProfiler(
     ) {
         Logger.info("Running performance test: $testCase")
 
-        adb.shell(
-            buildString {
-                append("am instrument -w -r ")
-                append("-e class \"$testCase\" ")
-                append("-e androidx.benchmark.suppressErrors \"EMULATOR\" ")
-                append("-e mperf.simpleperf true ")
-                append("-e mperf.simpleperfArgs \"'${options.simpleperfArgs}'\" ")
-                append(instrumentationRunner)
-            },
-        )
+        val instrumentationOutput =
+            adb.shell(
+                buildString {
+                    append("am instrument -w -r ")
+                    append("-e class \"$testCase\" ")
+                    append("-e androidx.benchmark.suppressErrors \"EMULATOR\" ")
+                    append("-e androidx.benchmark.dryRunMode.enable true ")
+                    append("-e androidx.benchmark.profiling.mode $BENCHMARK_STACK_SAMPLING_MODE ")
+                    append(instrumentationRunner)
+                },
+            )
 
         Logger.info("Test complete. Pulling trace...")
 
         val outputDir = adb.getDirUsableByAppAndShell(instrumentationRunner.substringBefore("/"))
-        val perfData = createTempFile("tmp", "data")
         val trace =
-            adb.ls(outputDir).firstOrNull { it.contains("perf.data") }
-                ?: throw PrintMessage("No simpleperf data found by instrumentation test in $outputDir", printError = true)
+            findBenchmarkTracePath(instrumentationOutput)
+                ?: adb
+                    .ls(outputDir)
+                    .firstOrNull { it.endsWith(".perfetto-trace") }
+                    ?.let { "$outputDir$it" }
+                ?: throw PrintMessage("No simpleperf trace found by instrumentation test in $outputDir", printError = true)
 
-        adb.pull("$outputDir$trace", perfData.toString())
-        convertToGecko(options, perfData, output)
+        adb.pull(trace, output.toString())
     }
+
+    private fun findBenchmarkTracePath(instrumentationOutput: String): String? =
+        instrumentationOutput
+            .lineSequence()
+            .filter { it.startsWith(INSTRUMENTATION_ADDITIONAL_OUTPUT_PREFIX) }
+            .map { it.substringAfter("=").trim() }
+            .firstOrNull { it.endsWith(".perfetto-trace") }
 }
