@@ -399,20 +399,25 @@ object InstrumentsParser {
         input: Path,
         xpath: String,
     ): Document {
-        val xmlStr =
+        val tmpFile = kotlin.io.path.createTempFile("xctrace_export_", ".xml")
+        try {
             withRetry(
                 delayMillis = XCTRACE_RETRY_DELAY_MS,
                 shouldRetry = { (it as? ShellCommandException)?.exitCode == SIGSEV_EXIT_CODE },
             ) {
                 ShellExecutor().runCommand(
-                    "xctrace export --input $input --xpath '$xpath'",
+                    "xctrace export --input $input --xpath '$xpath' --output $tmpFile",
                     redirectOutput = ProcessBuilder.Redirect.PIPE,
                     redirectError = ProcessBuilder.Redirect.PIPE,
                     shell = true,
                 )
             }
 
-        return processXCTraceOutput(xmlStr)
+            val xmlStr = tmpFile.toFile().readText()
+            return processXCTraceOutput(xmlStr)
+        } finally {
+            tmpFile.toFile().delete()
+        }
     }
 
     /**
@@ -421,20 +426,25 @@ object InstrumentsParser {
      * Note: It doesn't seem possible to use `--xpath` to query the TOC
      */
     private fun queryXCTraceTOC(input: Path): Document {
-        val xmlStr =
+        val tmpFile = kotlin.io.path.createTempFile("xctrace_toc_", ".xml")
+        try {
             withRetry(
                 delayMillis = XCTRACE_RETRY_DELAY_MS,
                 shouldRetry = { (it as? ShellCommandException)?.exitCode == SIGSEV_EXIT_CODE },
             ) {
                 ShellExecutor().runCommand(
-                    "xctrace export --input $input --toc",
+                    "xctrace export --input $input --toc --output $tmpFile",
                     redirectOutput = ProcessBuilder.Redirect.PIPE,
                     redirectError = ProcessBuilder.Redirect.PIPE,
                     shell = true,
                 )
             }
 
-        return processXCTraceOutput(xmlStr)
+            val xmlStr = tmpFile.toFile().readText()
+            return processXCTraceOutput(xmlStr)
+        } finally {
+            tmpFile.toFile().delete()
+        }
     }
 
     private fun processXCTraceOutput(xmlStr: String): Document {
