@@ -170,6 +170,30 @@ class InstrumentsProfilerTest {
     }
 
     @Test
+    fun `execute retries sigpipe when xctrace leaves partial output`() {
+        val output = createTempDirectory("instruments-profiler-sigpipe-retry").resolve("trace.trace")
+        var attempts = 0
+
+        doAnswer { invocation ->
+            val outputPath = Path.of(invocation.getArgument<String>(3))
+            attempts++
+            if (attempts == 1) {
+                Files.createDirectories(outputPath)
+                Files.createFile(outputPath.resolve("partial"))
+                throw IllegalStateException("xctrace exited with code 141")
+            }
+
+            assertTrue(outputPath.notExists(), "SIGPIPE trace should be removed before retrying")
+            Files.createDirectories(outputPath)
+            null
+        }.whenever(mockXcodeUtils).record(any<String>(), any<List<String>>(), any<String>(), any<String>(), isNull())
+
+        InstrumentsProfiler(mockXcodeUtils, InstrumentsProfilerOptions()).execute("com.example.app", output)
+
+        verify(mockXcodeUtils, times(2)).record(any<String>(), any<List<String>>(), any<String>(), any<String>(), isNull())
+    }
+
+    @Test
     fun `execute does not retry xctrace failures without partial output`() {
         val output = createTempDirectory("instruments-profiler-no-retry").resolve("trace.trace")
         whenever(mockXcodeUtils.record(any<String>(), any<List<String>>(), any<String>(), any<String>(), isNull()))
