@@ -118,7 +118,4 @@ jobs:
           disable-animations: true
           script: |
             integration-fixtures/android/install.sh emulator-5554
-            ./gradlew test --no-daemon --stacktrace --console=plain \
-              -Dmperf.integration.enabled=true \
-              -Dmperf.integration.device=emulator-5554 \
-              --tests com.bromano.mobile.perf.integration.AndroidProfilerIntegrationTest
+            ./gradlew test --no-daemon --stacktrace --console=plain -Dmperf.integration.enabled=true -Dmperf.integration.device=emulator-5554 --tests com.bromano.mobile.perf.integration.AndroidProfilerIntegrationTest

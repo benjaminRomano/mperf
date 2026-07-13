@@ -41,6 +41,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 
 - Fixed platform integration tests leaking into generic Linux unit-test execution: Android device discovery is now deferred until integration testing is explicitly enabled, while the saved Instruments trace conversion test is macOS-gated and runs in the dedicated iOS CI job.
+- Fixed the Android emulator action passing shell line-continuation characters to Gradle as a literal task instead of starting the end-to-end profiling suite.
 - Fixed Macrobenchmark failures being treated as successful collections and stale output files being selected when a run did not produce a new trace.
 - Fixed ART method tracing using the wall-clock flag before its supported API level and pulling traces before Android finished writing them.
 - Fixed Perfetto and Simpleperf sessions failing nondeterministically when profiler process startup took longer than a fixed delay.
