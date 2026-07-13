@@ -3,6 +3,8 @@ package com.bromano.mobile.perf.gecko
 import com.bromano.mobile.perf.utils.ZipUtils
 import com.google.gson.Gson
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.condition.EnabledOnOs
+import org.junit.jupiter.api.condition.OS
 import org.junit.jupiter.api.io.TempDir
 import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.Path
@@ -23,6 +25,7 @@ class InstrumentsConverterTest {
     }
 
     @Test
+    @EnabledOnOs(OS.MAC)
     fun convertsTraceToExpectedGeckoProfile(
         @TempDir tempDir: Path,
     ) {

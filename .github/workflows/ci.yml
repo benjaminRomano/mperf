@@ -78,6 +78,7 @@ jobs:
           ./gradlew test --no-daemon --stacktrace
           -Dmperf.integration.ios.enabled=true
           --tests com.bromano.mobile.perf.integration.IosProfilerIntegrationTest
+          --tests com.bromano.mobile.perf.gecko.InstrumentsConverterTest
 
   android-integration:
     name: Android emulator integration

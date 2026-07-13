@@ -26,9 +26,10 @@ import kotlin.test.assertTrue
 
 class AndroidProfilerIntegrationTest {
     private val shell = ShellExecutor()
-    private val device =
+    private val device by lazy {
         System.getProperty("mperf.integration.device")
             ?: shell.getConnectedAndroidDevices().firstOrNull()
+    }
     private val instrumentationRunner =
         System.getProperty(
             "mperf.integration.instrumentation",
