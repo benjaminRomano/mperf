@@ -64,14 +64,15 @@ class InstrumentsProfiler(
                 )
                 return
             } catch (error: IllegalStateException) {
-                val isTransientXctraceCrash = error.message == XCTRACE_SEGFAULT_MESSAGE
-                if (!isTransientXctraceCrash || attempt >= XCTRACE_MAX_ATTEMPTS) {
+                val isRetryableFinalizationFailure =
+                    output.toFile().exists() && error.message in XCTRACE_RETRYABLE_FAILURES
+                if (!isRetryableFinalizationFailure || attempt >= XCTRACE_MAX_ATTEMPTS) {
                     throw error
                 }
 
                 attempt++
                 Logger.warning(
-                    "Warning: xctrace crashed while finalizing the trace; " +
+                    "Warning: xctrace failed while finalizing the trace; " +
                         "removing the partial output and retrying once.",
                 )
                 output.toFile().deleteRecursively()
@@ -88,6 +89,10 @@ class InstrumentsProfiler(
 
     private companion object {
         const val XCTRACE_MAX_ATTEMPTS = 2
-        const val XCTRACE_SEGFAULT_MESSAGE = "xctrace exited with code 139"
+        val XCTRACE_RETRYABLE_FAILURES =
+            setOf(
+                "xctrace exited with code 1",
+                "xctrace exited with code 139",
+            )
     }
 }
