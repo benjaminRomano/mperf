@@ -1,5 +1,6 @@
 package com.bromano.mobile.perf.gecko
 
+import com.bromano.mobile.perf.utils.Shell
 import com.bromano.mobile.perf.utils.ShellCommandException
 import com.bromano.mobile.perf.utils.ShellExecutor
 import com.bromano.mobile.perf.utils.withRetry
@@ -10,6 +11,7 @@ import org.w3c.dom.NodeList
 import org.xml.sax.InputSource
 import java.io.StringReader
 import java.io.StringWriter
+import java.nio.file.Files
 import java.nio.file.Path
 import javax.xml.XMLConstants
 import javax.xml.parsers.DocumentBuilderFactory
@@ -504,43 +506,52 @@ object InstrumentsParser {
     private fun queryXCTrace(
         input: Path,
         xpath: String,
-    ): Document {
-        val xmlStr =
-            withRetry(
-                delayMillis = XCTRACE_RETRY_DELAY_MS,
-                shouldRetry = { (it as? ShellCommandException)?.exitCode == SIGSEV_EXIT_CODE },
-            ) {
-                ShellExecutor().runCommand(
-                    "xcrun xctrace export --input ${shellQuote(input.toString())} --xpath ${shellQuote(xpath)}",
-                    redirectOutput = ProcessBuilder.Redirect.PIPE,
-                    redirectError = ProcessBuilder.Redirect.PIPE,
-                    shell = true,
-                )
-            }
-
-        return processXCTraceOutput(xmlStr)
-    }
+    ): Document = processXCTraceOutput(exportXCTraceXml(input, "--xpath", xpath))
 
     /**
      * Get the Table of Contents
      *
      * Note: It doesn't seem possible to use `--xpath` to query the TOC
      */
-    private fun queryXCTraceTOC(input: Path): Document {
-        val xmlStr =
+    private fun queryXCTraceTOC(input: Path): Document = processXCTraceOutput(exportXCTraceXml(input, "--toc"))
+
+    internal fun exportXCTraceXml(
+        input: Path,
+        selector: String,
+        selectorValue: String? = null,
+        shell: Shell = ShellExecutor(),
+        temporaryFile: () -> Path = { Files.createTempFile("mperf-xctrace-export-", ".xml") },
+    ): String {
+        require(
+            (selector == "--toc" && selectorValue == null) ||
+                (selector == "--xpath" && selectorValue != null),
+        ) { "xctrace export requires --toc or --xpath with an expression" }
+
+        val output = temporaryFile()
+        return try {
             withRetry(
                 delayMillis = XCTRACE_RETRY_DELAY_MS,
                 shouldRetry = { (it as? ShellCommandException)?.exitCode == SIGSEV_EXIT_CODE },
             ) {
-                ShellExecutor().runCommand(
-                    "xcrun xctrace export --input ${shellQuote(input.toString())} --toc",
+                Files.deleteIfExists(output)
+                val command =
+                    buildList {
+                        addAll(listOf("xcrun", "xctrace", "export", "--input", input.toString(), selector))
+                        selectorValue?.let(::add)
+                        addAll(listOf("--output", output.toString()))
+                    }.joinToString(" ") { shellQuote(it) }
+                shell.runCommand(
+                    command,
                     redirectOutput = ProcessBuilder.Redirect.PIPE,
                     redirectError = ProcessBuilder.Redirect.PIPE,
                     shell = true,
                 )
             }
-
-        return processXCTraceOutput(xmlStr)
+            require(Files.isRegularFile(output)) { "xctrace did not create XML output at $output" }
+            Files.readString(output)
+        } finally {
+            Files.deleteIfExists(output)
+        }
     }
 
     internal fun processXCTraceOutput(xmlStr: String): Document {

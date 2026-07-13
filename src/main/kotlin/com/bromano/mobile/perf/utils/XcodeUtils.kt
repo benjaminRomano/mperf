@@ -292,7 +292,7 @@ class XcodeUtils(
                 shell.startProcess("kill -INT ${process.pid()}")
                 shell.waitFor(process, 30, TimeUnit.SECONDS)
             } else {
-                shell.waitFor(process, 2, TimeUnit.MINUTES)
+                shell.waitFor(process, recordingCompletionTimeoutMillis(timeLimit), TimeUnit.MILLISECONDS)
             }
         if (!stoppedWithinDeadline) {
             process.destroy()
@@ -362,6 +362,31 @@ class XcodeUtils(
 
     private companion object {
         const val SIMULATOR_LIST_COMMAND = "xcrun simctl list devices available --json"
+        val XCTRACE_FINALIZATION_GRACE_MILLIS = TimeUnit.MINUTES.toMillis(3)
+        val XCTRACE_TIME_LIMIT = Regex("""^(\d+)(ms|s|m|h)$""")
+
+        fun recordingCompletionTimeoutMillis(timeLimit: String): Long {
+            val match =
+                XCTRACE_TIME_LIMIT.matchEntire(timeLimit.trim())
+                    ?: return XCTRACE_FINALIZATION_GRACE_MILLIS
+            val amount = match.groupValues[1].toLongOrNull() ?: return Long.MAX_VALUE
+            val unitMillis =
+                when (match.groupValues[2]) {
+                    "ms" -> 1L
+                    "s" -> TimeUnit.SECONDS.toMillis(1)
+                    "m" -> TimeUnit.MINUTES.toMillis(1)
+                    "h" -> TimeUnit.HOURS.toMillis(1)
+                    else -> error("Unsupported xctrace duration unit")
+                }
+            val maximumRecordingMillis = Long.MAX_VALUE - XCTRACE_FINALIZATION_GRACE_MILLIS
+            val recordingMillis =
+                if (amount > maximumRecordingMillis / unitMillis) {
+                    maximumRecordingMillis
+                } else {
+                    amount * unitMillis
+                }
+            return recordingMillis + XCTRACE_FINALIZATION_GRACE_MILLIS
+        }
     }
 
     private fun InputStream.forwardToStdout() {
