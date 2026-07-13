@@ -23,7 +23,7 @@ class IosProfilerIntegrationTest {
     private val shell = ShellExecutor()
 
     @Test
-    @Timeout(value = 15, unit = TimeUnit.MINUTES)
+    @Timeout(value = 20, unit = TimeUnit.MINUTES)
     fun collects_launch_and_attach_traces_and_converts_time_profile() {
         assumeTrue(
             java.lang.Boolean.getBoolean("mperf.integration.ios.enabled"),

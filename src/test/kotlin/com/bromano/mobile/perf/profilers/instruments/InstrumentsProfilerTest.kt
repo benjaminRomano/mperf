@@ -10,6 +10,7 @@ import org.mockito.kotlin.doAnswer
 import org.mockito.kotlin.doNothing
 import org.mockito.kotlin.isNull
 import org.mockito.kotlin.mock
+import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import java.nio.file.Files
@@ -89,6 +90,48 @@ class InstrumentsProfilerTest {
             }
 
         assertTrue(error.message!!.contains("Trace file was not created"))
+    }
+
+    @Test
+    fun `execute retries an xctrace finalization crash once and removes partial output`() {
+        val tempDir: Path = createTempDirectory("instruments-profiler-retry")
+        val output = tempDir.resolve("trace.trace")
+        var attempts = 0
+
+        doAnswer { invocation ->
+            val outputPath = Path.of(invocation.getArgument<String>(3))
+            attempts++
+            if (attempts == 1) {
+                Files.createDirectories(outputPath)
+                Files.createFile(outputPath.resolve("partial"))
+                throw IllegalStateException("xctrace exited with code 139")
+            }
+
+            assertTrue(outputPath.notExists(), "Partial trace should be removed before retrying")
+            Files.createDirectories(outputPath)
+            Files.createFile(outputPath.resolve("completed"))
+            null
+        }.whenever(mockXcodeUtils).record(any<String>(), any<List<String>>(), any<String>(), any<String>(), isNull())
+
+        InstrumentsProfiler(mockXcodeUtils, InstrumentsProfilerOptions()).execute("com.example.app", output)
+
+        verify(mockXcodeUtils, times(2)).record(any<String>(), any<List<String>>(), any<String>(), any<String>(), isNull())
+        assertTrue(output.resolve("completed").exists())
+    }
+
+    @Test
+    fun `execute does not retry other xctrace failures`() {
+        val output = createTempDirectory("instruments-profiler-no-retry").resolve("trace.trace")
+        whenever(mockXcodeUtils.record(any<String>(), any<List<String>>(), any<String>(), any<String>(), isNull()))
+            .thenThrow(IllegalStateException("xctrace exited with code 1"))
+
+        val error =
+            assertThrows(IllegalStateException::class.java) {
+                InstrumentsProfiler(mockXcodeUtils, InstrumentsProfilerOptions()).execute("com.example.app", output)
+            }
+
+        assertTrue(error.message!!.contains("code 1"))
+        verify(mockXcodeUtils).record(any<String>(), any<List<String>>(), any<String>(), any<String>(), isNull())
     }
 
     @Test

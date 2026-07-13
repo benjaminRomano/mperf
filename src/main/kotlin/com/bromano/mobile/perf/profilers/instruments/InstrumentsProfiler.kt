@@ -1,6 +1,7 @@
 package com.bromano.mobile.perf.profilers.instruments
 
 import com.bromano.mobile.perf.profilers.Profiler
+import com.bromano.mobile.perf.utils.Logger
 import com.bromano.mobile.perf.utils.XcodeUtils
 import com.github.ajalt.clikt.core.PrintMessage
 import java.nio.file.Path
@@ -38,13 +39,7 @@ class InstrumentsProfiler(
             output.deleteRecursively()
         }
 
-        xcodeUtils.record(
-            template = options.template,
-            instruments = options.instruments,
-            bundleIdentifier = packageName,
-            outputPath = output.toString(),
-            timeLimit = options.timeLimit,
-        )
+        recordWithTransientCrashRetry(packageName, output)
 
         if (!output.toFile().exists()) {
             throw PrintMessage("Trace file was not created at $output", printError = true)
@@ -53,10 +48,46 @@ class InstrumentsProfiler(
         println("Recording complete: $output")
     }
 
+    private fun recordWithTransientCrashRetry(
+        packageName: String,
+        output: Path,
+    ) {
+        var attempt = 1
+        while (true) {
+            try {
+                xcodeUtils.record(
+                    template = options.template,
+                    instruments = options.instruments,
+                    bundleIdentifier = packageName,
+                    outputPath = output.toString(),
+                    timeLimit = options.timeLimit,
+                )
+                return
+            } catch (error: IllegalStateException) {
+                val isTransientXctraceCrash = error.message == XCTRACE_SEGFAULT_MESSAGE
+                if (!isTransientXctraceCrash || attempt >= XCTRACE_MAX_ATTEMPTS) {
+                    throw error
+                }
+
+                attempt++
+                Logger.warning(
+                    "Warning: xctrace crashed while finalizing the trace; " +
+                        "removing the partial output and retrying once.",
+                )
+                output.toFile().deleteRecursively()
+            }
+        }
+    }
+
     override fun executeTest(
         packageName: String,
         instrumentationRunner: String,
         testCase: String,
         output: Path,
     ): Unit = throw UnsupportedOperationException("Instruments does not support Android instrumentation test collection")
+
+    private companion object {
+        const val XCTRACE_MAX_ATTEMPTS = 2
+        const val XCTRACE_SEGFAULT_MESSAGE = "xctrace exited with code 139"
+    }
 }
