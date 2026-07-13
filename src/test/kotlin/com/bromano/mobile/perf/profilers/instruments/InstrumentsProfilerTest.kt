@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
 import org.mockito.kotlin.doAnswer
 import org.mockito.kotlin.doNothing
+import org.mockito.kotlin.isNull
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
@@ -37,7 +38,7 @@ class InstrumentsProfilerTest {
             Files.createDirectories(outputPath.parent)
             Files.createFile(outputPath)
             null
-        }.whenever(mockXcodeUtils).record(any<String>(), any<List<String>>(), any<String>(), any<String>())
+        }.whenever(mockXcodeUtils).record(any<String>(), any<List<String>>(), any<String>(), any<String>(), isNull())
 
         val profiler = InstrumentsProfiler(mockXcodeUtils, options)
 
@@ -48,6 +49,7 @@ class InstrumentsProfilerTest {
             options.instruments,
             "com.example.app",
             output.toString(),
+            null,
         )
         assertTrue(output.exists(), "Trace file should be present after recording")
     }
@@ -63,7 +65,7 @@ class InstrumentsProfilerTest {
             assertTrue(outputPath.notExists(), "Existing output should be deleted before recording starts")
             Files.createFile(outputPath)
             null
-        }.whenever(mockXcodeUtils).record(any<String>(), any<List<String>>(), any<String>(), any<String>())
+        }.whenever(mockXcodeUtils).record(any<String>(), any<List<String>>(), any<String>(), any<String>(), isNull())
 
         val profiler = InstrumentsProfiler(mockXcodeUtils, InstrumentsProfilerOptions())
 
@@ -77,7 +79,7 @@ class InstrumentsProfilerTest {
         val tempDir: Path = createTempDirectory("instruments-profiler-failure")
         val output = tempDir.resolve("trace.trace")
 
-        doNothing().whenever(mockXcodeUtils).record(any<String>(), any<List<String>>(), any<String>(), any<String>())
+        doNothing().whenever(mockXcodeUtils).record(any<String>(), any<List<String>>(), any<String>(), any<String>(), isNull())
 
         val profiler = InstrumentsProfiler(mockXcodeUtils, InstrumentsProfilerOptions())
 
@@ -87,5 +89,14 @@ class InstrumentsProfilerTest {
             }
 
         assertTrue(error.message!!.contains("Trace file was not created"))
+    }
+
+    @Test
+    fun `executeTest fails explicitly because Android instrumentation is unsupported`() {
+        val profiler = InstrumentsProfiler(mockXcodeUtils, InstrumentsProfilerOptions())
+
+        assertThrows(UnsupportedOperationException::class.java) {
+            profiler.executeTest("com.example.app", "runner", "test", Path.of("trace.trace"))
+        }
     }
 }

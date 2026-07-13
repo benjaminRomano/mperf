@@ -1,6 +1,7 @@
 package com.bromano.mobile.perf.profilers.perfetto
 
 import com.bromano.mobile.perf.utils.Adb
+import perfetto.protos.FtraceConfigKt.compactSchedConfig
 import perfetto.protos.PerfettoConfig
 import perfetto.protos.PerfettoConfig.TraceConfig.BufferConfig.FillPolicy
 import perfetto.protos.TraceConfigKt.bufferConfig
@@ -20,13 +21,17 @@ val ATRACE_CATEGORIES =
         "am",
         "audio",
         "bionic",
+        "binder_driver",
         "camera",
         "core_services",
         "dalvik",
         "disk",
         "gfx",
+        "freq",
         "hal",
         "input",
+        "idle",
+        "memreclaim",
         "network",
         "nnapi",
         "pdx",
@@ -35,8 +40,10 @@ val ATRACE_CATEGORIES =
         "res",
         "rro",
         "rs",
+        "sched",
         "sm",
         "ss",
+        "sync",
         "vibrator",
         "video",
         "view",
@@ -97,6 +104,8 @@ fun createPerfettoConfig(
                                         "power/suspend_resume",
                                         "power/cpu_frequency",
                                         "power/cpu_idle",
+                                        "disk",
+                                        "ufs/ufshcd_clk_gating",
                                         "sched/sched_process_exit",
                                         "sched/sched_process_free",
                                         "sched/sched_switch",
@@ -109,9 +118,11 @@ fun createPerfettoConfig(
                                     ),
                                 )
 
-                                // TODO: Should `*` be added here?
                                 atraceCategories.addAll(ATRACE_CATEGORIES.intersect(getAtraceCategories(adb)))
-                                atraceApps.addAll(listOf("lmkd", packageName))
+                                // Wildcard app matching is reliable on API 29+, and captures short-lived
+                                // secondary processes without exhausting atrace's package allowlist.
+                                atraceApps.addAll(if (adb.sdkVersion >= 29) listOf("*") else listOf(packageName))
+                                compactSched = compactSchedConfig { enabled = true }
                             }
                     }
             }
@@ -141,8 +152,14 @@ fun createPerfettoConfig(
                         androidPowerConfig =
                             androidPowerConfig {
                                 batteryPollMs = 250
+                                batteryCounters.addAll(
+                                    listOf(
+                                        PerfettoConfig.AndroidPowerConfig.BatteryCounters.BATTERY_COUNTER_CAPACITY_PERCENT,
+                                        PerfettoConfig.AndroidPowerConfig.BatteryCounters.BATTERY_COUNTER_CHARGE,
+                                        PerfettoConfig.AndroidPowerConfig.BatteryCounters.BATTERY_COUNTER_CURRENT,
+                                    ),
+                                )
                                 collectPowerRails = true
-                                collectEnergyEstimationBreakdown = true
                             }
                     }
             }
@@ -170,11 +187,25 @@ fun createPerfettoConfig(
                         name = "linux.sys_stats"
                         sysStatsConfig =
                             sysStatsConfig {
-                                statPeriodMs = 1000
-                                statCounters.addAll(
+                                meminfoPeriodMs = 1000
+                                meminfoCounters.addAll(
                                     listOf(
-                                        PerfettoConfig.SysStatsConfig.StatCounters.STAT_CPU_TIMES,
-                                        PerfettoConfig.SysStatsConfig.StatCounters.STAT_FORK_COUNT,
+                                        PerfettoConfig.MeminfoCounters.MEMINFO_MEM_TOTAL,
+                                        PerfettoConfig.MeminfoCounters.MEMINFO_MEM_FREE,
+                                        PerfettoConfig.MeminfoCounters.MEMINFO_MEM_AVAILABLE,
+                                        PerfettoConfig.MeminfoCounters.MEMINFO_BUFFERS,
+                                        PerfettoConfig.MeminfoCounters.MEMINFO_CACHED,
+                                        PerfettoConfig.MeminfoCounters.MEMINFO_SWAP_CACHED,
+                                        PerfettoConfig.MeminfoCounters.MEMINFO_ACTIVE,
+                                        PerfettoConfig.MeminfoCounters.MEMINFO_INACTIVE,
+                                        PerfettoConfig.MeminfoCounters.MEMINFO_UNEVICTABLE,
+                                        PerfettoConfig.MeminfoCounters.MEMINFO_SWAP_TOTAL,
+                                        PerfettoConfig.MeminfoCounters.MEMINFO_SWAP_FREE,
+                                        PerfettoConfig.MeminfoCounters.MEMINFO_DIRTY,
+                                        PerfettoConfig.MeminfoCounters.MEMINFO_WRITEBACK,
+                                        PerfettoConfig.MeminfoCounters.MEMINFO_ANON_PAGES,
+                                        PerfettoConfig.MeminfoCounters.MEMINFO_MAPPED,
+                                        PerfettoConfig.MeminfoCounters.MEMINFO_SHMEM,
                                     ),
                                 )
                             }
@@ -190,7 +221,7 @@ fun createPerfettoConfig(
                         processStatsConfig =
                             processStatsConfig {
                                 scanAllProcessesOnStart = true
-                                procStatsPollMs = 1000
+                                procStatsPollMs = 10000
                             }
                     }
             }

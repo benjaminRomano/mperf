@@ -25,7 +25,7 @@ object DocsGenerator {
      */
     fun generateCliDocsMarkdown(): String {
         // Build the CLI tree without performing any side effects
-        val config = readConfig()
+        val config = Config()
         val shell = ShellExecutor()
         val noop =
             object : ProfilerExecutor {

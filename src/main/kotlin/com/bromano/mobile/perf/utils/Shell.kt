@@ -4,6 +4,9 @@ import java.io.InputStream
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
+/** Quote one argument for a POSIX-compatible shell command. */
+internal fun shellQuote(value: String): String = "'${value.replace("'", "'\"'\"'")}'"
+
 class ShellCommandException(
     command: String,
     val exitCode: Int,
@@ -217,8 +220,8 @@ open class ShellExecutor : Shell {
     override fun open(url: String) {
         val os = System.getProperty("os.name")
         when {
-            os.startsWith("Linux") -> runCommand("xdg-open \"$url\"")
-            else -> runCommand("open \"$url\"")
+            os.startsWith("Linux") -> runCommand("xdg-open ${shellQuote(url)}")
+            else -> runCommand("open ${shellQuote(url)}")
         }
     }
 

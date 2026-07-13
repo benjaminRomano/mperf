@@ -22,9 +22,11 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --install-dir)
-      INSTALL_DIR="$2"; shift; shift ;;
+      [[ $# -ge 2 ]] || { echo "Missing value for --install-dir" >&2; exit 1; }
+      INSTALL_DIR="$2"; shift 2 ;;
     --bin-dir)
-      BIN_DIR="$2"; shift; shift ;;
+      [[ $# -ge 2 ]] || { echo "Missing value for --bin-dir" >&2; exit 1; }
+      BIN_DIR="$2"; shift 2 ;;
     -h|--help)
       usage; exit 0 ;;
     *)

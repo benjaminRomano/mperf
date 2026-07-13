@@ -3,6 +3,10 @@ package com.bromano.mobile.perf.profilers
 import java.nio.file.Path
 
 interface Profiler {
+    /** Process selected for collection, when the platform exposes a stable process identifier. */
+    val targetProcessId: Long?
+        get() = null
+
     /**
      * Run Profiler over an arbitrary app session
      */

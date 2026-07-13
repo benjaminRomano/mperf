@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="benjaminromano/mperf"
+REPO="${MPERF_REPOSITORY:-benjaminromano/mperf}"
+GITHUB_API_URL="${GITHUB_API_URL:-https://api.github.com}"
 INSTALL_DIR_DEFAULT="$HOME/.local/share/mperf"
 BIN_DIR_DEFAULT="$HOME/.local/bin"
 
@@ -26,11 +27,14 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --version)
-      VERSION="$2"; shift; shift ;;
+      [[ $# -ge 2 ]] || { echo "Missing value for --version" >&2; exit 1; }
+      VERSION="${2#v}"; shift 2 ;;
     --install-dir)
-      INSTALL_DIR="$2"; shift; shift ;;
+      [[ $# -ge 2 ]] || { echo "Missing value for --install-dir" >&2; exit 1; }
+      INSTALL_DIR="$2"; shift 2 ;;
     --bin-dir)
-      BIN_DIR="$2"; shift; shift ;;
+      [[ $# -ge 2 ]] || { echo "Missing value for --bin-dir" >&2; exit 1; }
+      BIN_DIR="$2"; shift 2 ;;
     -h|--help)
       usage; exit 0 ;;
     *)
@@ -38,74 +42,87 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ -n "$VERSION" && ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+  echo "Version must be a SemVer value such as 1.2.3 or 1.2.3-rc.1" >&2
+  exit 1
+fi
+
 need_cmd() { command -v "$1" >/dev/null 2>&1 || { echo "Missing required command: $1" >&2; exit 1; }; }
 
 need_cmd curl
 need_cmd java
+need_cmd python3
 
-sha256_cmd() {
+calculate_sha256() {
+  local file="$1"
   if command -v sha256sum >/dev/null 2>&1; then
-    echo sha256sum
+    sha256sum "$file" | awk '{print $1}'
   elif command -v shasum >/dev/null 2>&1; then
-    echo "shasum -a 256"
+    shasum -a 256 "$file" | awk '{print $1}'
   else
-    echo "" # none
+    echo "Missing required command: sha256sum or shasum" >&2
+    exit 1
   fi
 }
 
 fetch_latest_json() {
+  local endpoint="releases/latest"
   if [[ -n "$VERSION" ]]; then
-    curl -fsSL "https://api.github.com/repos/$REPO/releases/tags/v$VERSION"
-  else
-    curl -fsSL "https://api.github.com/repos/$REPO/releases/latest"
+    endpoint="releases/tags/v$VERSION"
   fi
+  curl --fail --location --silent --show-error --retry 3 --retry-all-errors \
+    --header "Accept: application/vnd.github+json" \
+    --header "X-GitHub-Api-Version: 2022-11-28" \
+    "$GITHUB_API_URL/repos/$REPO/$endpoint"
 }
 
 find_asset_url() {
-  # $1 = JSON, $2 = suffix to match
-  echo "$1" | grep -Eo '"browser_download_url"\s*:\s*"[^"]+"' | \
-    sed -E 's/.*"(https:[^"]+)"/\1/' | \
-    grep -E -e "$2" | head -n1
+  local json="$1"
+  local suffix="$2"
+  python3 -c 'import json, sys
+data = json.load(sys.stdin)
+suffix = sys.argv[1]
+matches = [asset["browser_download_url"] for asset in data.get("assets", []) if asset.get("name", "").endswith(suffix)]
+if len(matches) != 1:
+    raise SystemExit(f"expected one release asset ending in {suffix!r}, found {len(matches)}")
+print(matches[0])' "$suffix" <<< "$json"
 }
 
 JSON=$(fetch_latest_json)
 
-JAR_URL=$(find_asset_url "$JSON" "-all.jar$")
-SUM_URL=$(find_asset_url "$JSON" "-all.jar.sha256$")
-
-if [[ -z "$JAR_URL" ]]; then
-  echo "Failed to locate release JAR in GitHub API response." >&2
-  exit 1
-fi
+JAR_URL=$(find_asset_url "$JSON" "-all.jar")
+SUM_URL=$(find_asset_url "$JSON" "-all.jar.sha256")
 
 JAR_NAME=$(basename "$JAR_URL")
-VERSION_EXTRACTED=$(echo "$JAR_NAME" | sed -E 's/^mperf-([^-]+)-all\.jar/\1/')
+VERSION_EXTRACTED=${JAR_NAME#mperf-}
+VERSION_EXTRACTED=${VERSION_EXTRACTED%-all.jar}
 
 echo "Installing mperf version: $VERSION_EXTRACTED"
 
 mkdir -p "$INSTALL_DIR" "$BIN_DIR"
 
 TARGET_JAR="$INSTALL_DIR/$JAR_NAME"
-echo "Downloading: $JAR_URL"
-curl -fL --progress-bar -o "$TARGET_JAR" "$JAR_URL"
+TEMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/mperf-install.XXXXXX")
+trap 'rm -rf "$TEMP_DIR"' EXIT
+TEMP_JAR="$TEMP_DIR/$JAR_NAME"
+TEMP_SUM="$TEMP_DIR/$JAR_NAME.sha256"
 
-if [[ -n "$SUM_URL" ]]; then
-  echo "Downloading checksum: $SUM_URL"
-  TARGET_SUM="$INSTALL_DIR/$JAR_NAME.sha256"
-  curl -fL --progress-bar -o "$TARGET_SUM" "$SUM_URL"
-  SUM_TOOL=$(sha256_cmd)
-  if [[ -n "$SUM_TOOL" ]]; then
-    echo "Verifying checksum..."
-    pushd "$INSTALL_DIR" >/dev/null
-    if ! $SUM_TOOL -c "$JAR_NAME.sha256" 2>/dev/null; then
-      echo "Checksum verification failed" >&2
-      exit 1
-    fi
-    popd >/dev/null
-  else
-    echo "Warning: sha256sum/shasum not found; skipping checksum verification"
-  fi
+echo "Downloading: $JAR_URL"
+curl --fail --location --silent --show-error --retry 3 --retry-all-errors -o "$TEMP_JAR" "$JAR_URL"
+
+echo "Downloading checksum: $SUM_URL"
+curl --fail --location --silent --show-error --retry 3 --retry-all-errors -o "$TEMP_SUM" "$SUM_URL"
+
+echo "Verifying checksum..."
+EXPECTED_SUM=$(awk 'NR == 1 { print $1 }' "$TEMP_SUM" | tr '[:upper:]' '[:lower:]')
+ACTUAL_SUM=$(calculate_sha256 "$TEMP_JAR" | tr '[:upper:]' '[:lower:]')
+if [[ ! "$EXPECTED_SUM" =~ ^[0-9a-f]{64}$ || "$EXPECTED_SUM" != "$ACTUAL_SUM" ]]; then
+  echo "Checksum verification failed" >&2
+  exit 1
 fi
+
+mv "$TEMP_JAR" "$TARGET_JAR"
+cp "$TEMP_SUM" "$INSTALL_DIR/$JAR_NAME.sha256"
 
 # Maintain a stable symlink to the latest jar
 ln -sf "$TARGET_JAR" "$INSTALL_DIR/mperf-latest.jar"
@@ -174,4 +191,4 @@ for line in "${BOX_LINES[@]}"; do
 done
 echo "$border"
 
-echo "\nDone. Try: mperf --help"
+printf '\nDone. Try: mperf --help\n'

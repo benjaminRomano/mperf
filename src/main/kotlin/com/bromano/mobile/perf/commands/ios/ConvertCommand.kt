@@ -10,6 +10,7 @@ import com.github.ajalt.clikt.core.Context
 import com.github.ajalt.clikt.parameters.options.default
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.required
+import com.github.ajalt.clikt.parameters.options.validate
 import com.github.ajalt.clikt.parameters.types.enum
 import com.github.ajalt.clikt.parameters.types.int
 import com.github.ajalt.clikt.parameters.types.path
@@ -31,7 +32,7 @@ class ConvertCommand(
     private val runNum by option(
         "--run",
         help = "Which run within the trace file to analyze",
-    ).int().default(1)
+    ).int().default(1).validate { require(it > 0) { "must be at least 1" } }
 
     private val output by option(
         "-o",

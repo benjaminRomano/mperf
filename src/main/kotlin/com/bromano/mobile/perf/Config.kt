@@ -11,6 +11,7 @@ import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.nio.file.StandardCopyOption
 import kotlin.io.path.notExists
 import kotlin.io.path.outputStream
 
@@ -96,11 +97,24 @@ fun writeConfig(
     path: Path,
     config: Config,
 ) {
-    path.parent?.toFile()?.mkdirs()
-    if (path.notExists()) {
-        Files.createFile(path)
-    }
-    path.outputStream().use { os ->
-        configMapper.writeValue(os, config)
+    val parent = path.toAbsolutePath().parent
+    Files.createDirectories(parent)
+    val temporary = Files.createTempFile(parent, ".${path.fileName}", ".tmp")
+    try {
+        temporary.outputStream().use { os ->
+            configMapper.writeValue(os, config)
+        }
+        try {
+            Files.move(
+                temporary,
+                path,
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+            Files.move(temporary, path, StandardCopyOption.REPLACE_EXISTING)
+        }
+    } finally {
+        Files.deleteIfExists(temporary)
     }
 }

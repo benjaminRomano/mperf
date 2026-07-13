@@ -68,8 +68,10 @@ object GeckoGenerator {
         val threads =
             samples
                 .groupBy {
-                    it.thread.tid
-                }.map { (threadId, samples) ->
+                    it.thread.pid to it.thread.tid
+                }.map { (processAndThreadId, samples) ->
+                    val (processId, threadId) = processAndThreadId
+                    val processSymbols = symbolsInfo.filter { it.pid < 0 || it.pid == processId }
                     val frameTable = mutableListOf<GeckoFrame>()
                     val stackTable = mutableListOf<GeckoStack>()
                     val stringTable = mutableListOf<String>()
@@ -106,7 +108,7 @@ object GeckoGenerator {
                                                     getLibraryCategory(
                                                         app,
                                                         frame,
-                                                        getLibraryPathForSymbol(symbolsInfo, frame),
+                                                        getLibraryPathForSymbol(processSymbols, frame),
                                                     ),
                                             ),
                                         )
@@ -168,8 +170,7 @@ object GeckoGenerator {
                     GeckoThread(
                         name = samples.firstOrNull()?.thread?.threadName ?: "<unknown>",
                         tid = threadId,
-                        // Currently, we only support single process runs
-                        pid = 0,
+                        pid = processId.toLong(),
                         samples = GeckoSamples(data = geckoSamples.map { it.toData() }),
                         stringTable = stringTable,
                         frameTable = GeckoFrameTable(data = frameTable.map { it.toData() }),

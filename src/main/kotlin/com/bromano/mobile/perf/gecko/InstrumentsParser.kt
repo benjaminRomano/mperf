@@ -11,6 +11,7 @@ import org.xml.sax.InputSource
 import java.io.StringReader
 import java.io.StringWriter
 import java.nio.file.Path
+import javax.xml.XMLConstants
 import javax.xml.parsers.DocumentBuilderFactory
 import javax.xml.transform.OutputKeys
 import javax.xml.transform.TransformerFactory
@@ -20,11 +21,13 @@ import javax.xml.xpath.XPathConstants
 import javax.xml.xpath.XPathFactory
 
 private const val THREAD_TAG = "thread"
+private const val PROCESS_TAG = "process"
 private const val THREAD_STATE_TAG = "thread-state"
 private const val WEIGHT_TAG = "weight"
 const val SAMPLE_TIME_TAG = "sample-time"
 private const val BACKTRACE_TAG = "backtrace"
 private const val TID_TAG = "tid"
+private const val PID_TAG = "pid"
 private const val FRAME_TAG = "frame"
 private const val BINARY_TAG = "binary"
 private const val ROW_TAG = "row"
@@ -52,8 +55,9 @@ private const val XCTRACE_RETRY_DELAY_MS = 500L
 data class ThreadDescription(
     val threadName: String,
     val tid: Int,
+    val pid: Int,
 ) {
-    override fun toString(): String = "$threadName (tid: $tid)"
+    override fun toString(): String = "$threadName (pid: $pid, tid: $tid)"
 }
 
 data class InstrumentsSettings(
@@ -64,6 +68,14 @@ data class InstrumentsSettings(
     val hasThreadStates: Boolean,
     val hasVirtualMemory: Boolean,
     val hasSyscalls: Boolean,
+)
+
+data class InstrumentsTraceData(
+    val samples: List<InstrumentsSample>,
+    val loadedImageList: List<Library>,
+    val threadIdSamples: List<InstrumentsSample>,
+    val virtualMemorySamples: List<InstrumentsSample>,
+    val syscallSamples: List<InstrumentsSample>,
 )
 
 /**
@@ -95,6 +107,7 @@ data class Library(
     val uuid: String,
     val loadAddress: ULong,
     val arch: String,
+    val pid: Int = -1,
 )
 
 /**
@@ -111,6 +124,30 @@ data class SymbolEntry(
  * Utilities for parsing Instruments files
  */
 object InstrumentsParser {
+    private val conversionSchemas =
+        listOf(TIME_PROFILE_SCHEMA, THREAD_STATE_SCHEMA, VIRTUAL_MEMORY_SCHEMA, SYSCALL_SCHEMA)
+
+    /**
+     * Export and parse every table needed for Gecko conversion in one xctrace invocation.
+     * A single union query avoids exporting the Time Profiler table once for samples and
+     * again for loaded images.
+     */
+    fun loadTraceData(
+        input: Path,
+        runNum: Int = 1,
+    ): InstrumentsTraceData {
+        val schemaPredicate = conversionSchemas.joinToString(" or ") { "@schema=\"$it\"" }
+        val document = queryXCTrace(input, "/trace-toc[1]/run[$runNum]/data[1]/table[$schemaPredicate]")
+
+        return InstrumentsTraceData(
+            samples = parseSamples(document, TIME_PROFILE_SCHEMA, SAMPLE_TIME_TAG),
+            loadedImageList = createBinaryImageMapping(document).values.sortedBy { it.loadAddress },
+            threadIdSamples = parseIdleThreadSamples(document),
+            virtualMemorySamples = parseSamples(document, VIRTUAL_MEMORY_SCHEMA, START_TIME_TAG),
+            syscallSamples = parseSamples(document, SYSCALL_SCHEMA, START_TIME_TAG),
+        )
+    }
+
     /**
      * Create a sorted list of Libraries suitable for lookup. These are sorted
      * so address queries can be resolved via binary search.
@@ -147,24 +184,54 @@ object InstrumentsParser {
         input: Path,
         runNum: Int = 1,
     ): Map<String, Library> {
-        val idToLibrary = mutableMapOf<String, Library>()
         val document = queryXCTrace(input, "/trace-toc[1]/run[$runNum]/data[1]/table[@schema=\"$TIME_PROFILE_SCHEMA\"]")
-        document
-            .getElementsByTagName(FRAME_TAG)
-            .asSequence()
-            .flatMap { it.childNodesSequence() }
-            .filter { it.nodeName == BINARY_TAG }
-            .forEach {
-                val binaryId = it.getIdAttrValue()
-                val binaryPath = it.getPathAttrValue()
-                val loadAddr = it.getLoadAddrAttrValue()
-                val arch = it.getArchAttrValue()
-                val uuid = it.getUUIDAttrValue()
-                if (binaryId != null && binaryPath != null && loadAddr != null && arch != null && uuid != null) {
-                    val library = Library(binaryPath, uuid, loadAddr.removePrefix("0x").toULong(16), arch)
-                    idToLibrary[binaryId] = library
+        return createBinaryImageMapping(document)
+    }
+
+    private fun createBinaryImageMapping(document: Document): Map<String, Library> {
+        val idToLibrary = mutableMapOf<String, Library>()
+        document.schemaResultNodes(TIME_PROFILE_SCHEMA).forEach { timeProfileNode ->
+            val originalNodeCache = mutableMapOf<String, Node>()
+            preloadTags(
+                timeProfileNode,
+                listOf(FRAME_TAG, BINARY_TAG, PROCESS_TAG, PID_TAG),
+                originalNodeCache,
+            )
+            timeProfileNode
+                .getElementsByTagName(FRAME_TAG)
+                .asSequence()
+                .forEach { frameNode ->
+                    val rowNode = frameNode.firstAncestorNamed(ROW_TAG) ?: return@forEach
+                    val processId =
+                        rowNode
+                            .getOptionalFirstOriginalNodeByTag(timeProfileNode, PROCESS_TAG, originalNodeCache)
+                            ?.getOptionalFirstOriginalNodeByTag(timeProfileNode, PID_TAG, originalNodeCache)
+                            ?.getChildValue()
+                            ?.toIntOrNull() ?: -1
+                    val originalFrame = getOriginalNode(timeProfileNode, frameNode, originalNodeCache)
+                    val binaryNode =
+                        originalFrame
+                            .childNodesSequence()
+                            .firstOrNull { it.nodeName == BINARY_TAG }
+                            ?.let { getOriginalNode(timeProfileNode, it, originalNodeCache) }
+                            ?: return@forEach
+                    val binaryPath = binaryNode.getPathAttrValue()
+                    val loadAddr = binaryNode.getLoadAddrAttrValue()
+                    val arch = binaryNode.getArchAttrValue()
+                    val uuid = binaryNode.getUUIDAttrValue()
+                    if (binaryPath != null && loadAddr != null && arch != null && uuid != null) {
+                        val library =
+                            Library(
+                                binaryPath,
+                                uuid,
+                                loadAddr.removePrefix("0x").toULong(16),
+                                arch,
+                                processId,
+                            )
+                        idToLibrary["$processId:$uuid:$loadAddr:$binaryPath"] = library
+                    }
                 }
-            }
+        }
         return idToLibrary
     }
 
@@ -255,36 +322,51 @@ object InstrumentsParser {
         runNum: Int = 1,
     ): List<InstrumentsSample> {
         val document = queryXCTrace(input, "/trace-toc[1]/run[$runNum]/data[1]/table[@schema=\"$schema\"]")
+        return parseSamples(document, schema, timeTag)
+    }
 
+    private fun parseSamples(
+        document: Document,
+        schema: String,
+        timeTag: String,
+    ): List<InstrumentsSample> = document.schemaResultNodes(schema).flatMap { parseSamples(it, timeTag) }
+
+    private fun parseSamples(
+        schemaNode: Element,
+        timeTag: String,
+    ): List<InstrumentsSample> {
         val originalNodeCache = mutableMapOf<String, Node>()
         preloadTags(
-            document,
-            listOf(BACKTRACE_TAG, timeTag, VM_OP_TAG, WEIGHT_TAG, THREAD_TAG, TID_TAG),
+            schemaNode,
+            listOf(BACKTRACE_TAG, timeTag, VM_OP_TAG, WEIGHT_TAG, THREAD_TAG, TID_TAG, PROCESS_TAG, PID_TAG),
             originalNodeCache,
         )
 
         val previousBacktraces = mutableMapOf<String, SymbolEntry>()
-        return document
+        return schemaNode
             .getElementsByTagName(BACKTRACE_TAG)
             .asSequence()
-            .map { backtraceNode ->
-                val rowNode = backtraceNode.parentNode
-                val originalBacktraceNode = getOriginalNode(document, backtraceNode, originalNodeCache)
+            .mapNotNull { backtraceNode ->
+                val parent = backtraceNode.parentNode
+                val rowNode = if (parent?.nodeName == ROW_TAG) parent else parent?.parentNode
+                rowNode?.takeIf { it.nodeName == ROW_TAG }?.let { backtraceNode to it }
+            }.map { (backtraceNode, rowNode) ->
+                val originalBacktraceNode = getOriginalNode(schemaNode, backtraceNode, originalNodeCache)
 
                 val sampleTime =
                     rowNode
-                        .getFirstOriginalNodeByTag(document, timeTag, originalNodeCache)
+                        .getFirstOriginalNodeByTag(schemaNode, timeTag, originalNodeCache)
                         .asTimeValue()
                         ?: throw IllegalStateException(
                             "Cannot find $timeTag for:\n${backtraceNode.toXMLString(true)}",
                         )
 
-                val threadNode = rowNode.getFirstOriginalNodeByTag(document, THREAD_TAG, originalNodeCache)
+                val threadNode = rowNode.getFirstOriginalNodeByTag(schemaNode, THREAD_TAG, originalNodeCache)
 
                 // The duration of the sample (Time Profile only)
                 val weightMs =
                     rowNode
-                        .getOptionalFirstOriginalNodeByTag(document, WEIGHT_TAG, originalNodeCache)
+                        .getOptionalFirstOriginalNodeByTag(schemaNode, WEIGHT_TAG, originalNodeCache)
                         ?.asTimeValue()
                         ?: 0.0
 
@@ -292,8 +374,15 @@ object InstrumentsParser {
 
                 val threadId =
                     threadNode
-                        .getFirstOriginalNodeByTag(document, TID_TAG, originalNodeCache)
+                        .getFirstOriginalNodeByTag(schemaNode, TID_TAG, originalNodeCache)
                         .getChildValue()
+                        ?.toIntOrNull() ?: -1
+
+                val processId =
+                    rowNode
+                        .getOptionalFirstOriginalNodeByTag(schemaNode, PROCESS_TAG, originalNodeCache)
+                        ?.getOptionalFirstOriginalNodeByTag(schemaNode, PID_TAG, originalNodeCache)
+                        ?.getChildValue()
                         ?.toIntOrNull() ?: -1
 
                 // There can be multiple text address "fragments"
@@ -336,12 +425,12 @@ object InstrumentsParser {
 
                 // Append virtual memory operation onto callstack if it exists (e.g. Page Fault)
                 rowNode
-                    .getOptionalFirstOriginalNodeByTag(document, VM_OP_TAG, originalNodeCache)
+                    .getOptionalFirstOriginalNodeByTag(schemaNode, VM_OP_TAG, originalNodeCache)
                     ?.getFmtAttrValue()
                     ?.let { backtrace.add(0, SymbolEntry(VIRTUAL_MEMORY_ADDR, it)) }
 
                 InstrumentsSample(
-                    thread = ThreadDescription(threadName, threadId),
+                    thread = ThreadDescription(threadName, threadId, processId),
                     sampleTime = sampleTime,
                     weightMs = weightMs,
                     backtrace = backtrace,
@@ -359,32 +448,49 @@ object InstrumentsParser {
         runNum: Int,
     ): List<InstrumentsSample> {
         val document = queryXCTrace(input, "/trace-toc[1]/run[$runNum]/data[1]/table[@schema=\"thread-state\"]")
-        val originalNodeCache = mutableMapOf<String, Node>()
-        preloadTags(document, listOf(THREAD_STATE_TAG, START_TIME_TAG, THREAD_TAG, TID_TAG), originalNodeCache)
+        return parseIdleThreadSamples(document)
+    }
 
-        return document
+    private fun parseIdleThreadSamples(document: Document): List<InstrumentsSample> =
+        document.schemaResultNodes(THREAD_STATE_SCHEMA).flatMap(::parseIdleThreadSamples)
+
+    private fun parseIdleThreadSamples(schemaNode: Element): List<InstrumentsSample> {
+        val originalNodeCache = mutableMapOf<String, Node>()
+        preloadTags(
+            schemaNode,
+            listOf(THREAD_STATE_TAG, START_TIME_TAG, THREAD_TAG, TID_TAG, PROCESS_TAG, PID_TAG),
+            originalNodeCache,
+        )
+
+        return schemaNode
             .getElementsByTagName(THREAD_STATE_TAG)
             .asSequence()
             .filter {
                 it.parentNode?.nodeName == ROW_TAG &&
-                    getOriginalNode(document, it, originalNodeCache).getIdAttrValue() == "Idle"
+                    getOriginalNode(schemaNode, it, originalNodeCache).getIdAttrValue() == "Idle"
             }.map { threadStateNode ->
                 val rowNode = threadStateNode.parentNode
                 val sampleTime =
                     rowNode
-                        .getFirstOriginalNodeByTag(document, START_TIME_TAG, originalNodeCache)
+                        .getFirstOriginalNodeByTag(schemaNode, START_TIME_TAG, originalNodeCache)
                         .asTimeValue()
                         ?: throw IllegalStateException("row does not have start-time:\n${rowNode.toXMLString(true)}")
 
-                val threadNode = rowNode.getFirstOriginalNodeByTag(document, THREAD_TAG, originalNodeCache)
+                val threadNode = rowNode.getFirstOriginalNodeByTag(schemaNode, THREAD_TAG, originalNodeCache)
                 val threadName = threadNode.getFmtAttrValue() ?: "<unknown>"
                 val threadId =
                     threadNode
-                        .getFirstOriginalNodeByTag(document, TID_TAG, originalNodeCache)
-                        .let { getOriginalNode(document, it, originalNodeCache).getChildValue()?.toIntOrNull() ?: -1 }
+                        .getFirstOriginalNodeByTag(schemaNode, TID_TAG, originalNodeCache)
+                        .let { getOriginalNode(schemaNode, it, originalNodeCache).getChildValue()?.toIntOrNull() ?: -1 }
+                val processId =
+                    rowNode
+                        .getOptionalFirstOriginalNodeByTag(schemaNode, PROCESS_TAG, originalNodeCache)
+                        ?.getOptionalFirstOriginalNodeByTag(schemaNode, PID_TAG, originalNodeCache)
+                        ?.getChildValue()
+                        ?.toIntOrNull() ?: -1
 
                 InstrumentsSample(
-                    thread = ThreadDescription(threadName, threadId),
+                    thread = ThreadDescription(threadName, threadId, processId),
                     sampleTime = sampleTime,
                     weightMs = 0.0,
                     backtrace = emptyList(),
@@ -405,7 +511,7 @@ object InstrumentsParser {
                 shouldRetry = { (it as? ShellCommandException)?.exitCode == SIGSEV_EXIT_CODE },
             ) {
                 ShellExecutor().runCommand(
-                    "xctrace export --input $input --xpath '$xpath'",
+                    "xcrun xctrace export --input ${shellQuote(input.toString())} --xpath ${shellQuote(xpath)}",
                     redirectOutput = ProcessBuilder.Redirect.PIPE,
                     redirectError = ProcessBuilder.Redirect.PIPE,
                     shell = true,
@@ -427,7 +533,7 @@ object InstrumentsParser {
                 shouldRetry = { (it as? ShellCommandException)?.exitCode == SIGSEV_EXIT_CODE },
             ) {
                 ShellExecutor().runCommand(
-                    "xctrace export --input $input --toc",
+                    "xcrun xctrace export --input ${shellQuote(input.toString())} --toc",
                     redirectOutput = ProcessBuilder.Redirect.PIPE,
                     redirectError = ProcessBuilder.Redirect.PIPE,
                     shell = true,
@@ -437,15 +543,27 @@ object InstrumentsParser {
         return processXCTraceOutput(xmlStr)
     }
 
-    private fun processXCTraceOutput(xmlStr: String): Document {
-        // Remove XML Prolog (<xml? ... >) since parser can't handle it
-        val trimmedXmlStr = xmlStr.split("\n", limit = 2)[1]
+    internal fun processXCTraceOutput(xmlStr: String): Document {
+        require(xmlStr.isNotBlank()) { "xctrace returned empty XML output" }
+        val xmlStart = xmlStr.indexOf('<')
+        require(xmlStart >= 0) { "xctrace output did not contain XML" }
 
-        return DocumentBuilderFactory
-            .newInstance()
+        val factory = DocumentBuilderFactory.newInstance()
+        factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+        factory.setFeature("http://xml.org/sax/features/external-general-entities", false)
+        factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false)
+        factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false)
+        factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "")
+        factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "")
+        factory.isXIncludeAware = false
+        factory.isExpandEntityReferences = false
+
+        return factory
             .newDocumentBuilder()
-            .parse(InputSource(StringReader(trimmedXmlStr)))
+            .parse(InputSource(StringReader(xmlStr.substring(xmlStart))))
     }
+
+    private fun shellQuote(value: String): String = "'" + value.replace("'", "'\"'\"'") + "'"
 
     /**
      * XCTrace XML output avoids duplicating data by having teh first node contain all the information and subsequent
@@ -459,7 +577,7 @@ object InstrumentsParser {
      * Note: This method will mutate the originalNodeCache provided.
      */
     private fun getOriginalNode(
-        document: Document,
+        document: Element,
         node: Node,
         originalNodeCache: MutableMap<String, Node>,
     ): Node {
@@ -485,7 +603,7 @@ object InstrumentsParser {
      * Pre-compute the set of ID nodes to avoid expensive re-processing of XML Tree Nodes
      */
     private fun preloadTags(
-        node: Document,
+        node: Element,
         tags: List<String>,
         originalNodeCache: MutableMap<String, Node>,
     ) {
@@ -498,7 +616,7 @@ object InstrumentsParser {
     }
 
     private fun findNodeById(
-        node: Document,
+        node: Element,
         tag: String,
         id: Long,
     ): Node =
@@ -536,16 +654,31 @@ object InstrumentsParser {
 
     private fun Node.childNodesSequence(): Sequence<Node> = childNodes.asSequence()
 
+    private fun Node.firstAncestorNamed(name: String): Node? =
+        generateSequence(parentNode) { it.parentNode }.firstOrNull { it.nodeName == name }
+
     private fun NodeList.asSequence(): Sequence<Node> {
         var i = 0
         return generateSequence { item(i++) }
     }
 
+    private fun Document.schemaResultNodes(schema: String): List<Element> =
+        documentElement
+            .childNodesSequence()
+            .filter { it.nodeName == "node" }
+            .filter { resultNode ->
+                resultNode
+                    .childNodesSequence()
+                    .firstOrNull { it.nodeName == "schema" }
+                    ?.getNameAttrValue() == schema
+            }.mapNotNull { it as? Element }
+            .toList()
+
     /**
      * Find direct descendant with a matching tag then find it's original node if not already the original
      */
     private fun Node.getFirstOriginalNodeByTag(
-        document: Document,
+        document: Element,
         tag: String,
         originalNodeCache: MutableMap<String, Node>,
     ): Node =
@@ -553,7 +686,7 @@ object InstrumentsParser {
             ?: throw IllegalStateException("Could not find original node with tag, $tag:\n ${toXMLString(true)}")
 
     private fun Node.getOptionalFirstOriginalNodeByTag(
-        document: Document,
+        document: Element,
         tag: String,
         originalNodeCache: MutableMap<String, Node>,
     ): Node? =

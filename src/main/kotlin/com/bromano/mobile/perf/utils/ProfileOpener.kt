@@ -59,6 +59,7 @@ open class ProfileOpener(
         trace: Path,
         format: ProfilerFormat,
         profileViewerOverride: ProfileViewer? = null,
+        targetProcessId: Long? = null,
     ) {
         var file = trace.toFile().absoluteFile
         require(file.exists()) { "Trace not found: $file" }
@@ -74,14 +75,14 @@ open class ProfileOpener(
 
         // Handle Instruments traces directly without HTTP server
         if (profileViewer == ProfileViewer.INSTRUMENTS) {
-            shell.runCommand("open -a Instruments \"${file.absolutePath}\"")
+            shell.runCommand("open -a Instruments ${shellQuote(file.absolutePath)}")
             return
         }
 
         // If the file was collected by Instruments, we may need to convert into Gecko format, if not already done so.
         if (format == ProfilerFormat.INSTRUMENTS && !isGzipFile(file)) {
             val intermediateOutput = Files.createTempFile("instruments", ".tar.gz")
-            InstrumentsConverter.convert(packageName, trace).toFile(intermediateOutput)
+            InstrumentsConverter.convert(packageName, trace, processId = targetProcessId).toFile(intermediateOutput)
             file = intermediateOutput.toFile()
         }
 

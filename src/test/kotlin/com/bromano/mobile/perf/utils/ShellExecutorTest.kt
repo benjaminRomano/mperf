@@ -28,6 +28,15 @@ class ShellExecutorTest {
     private val shell = ShellExecutor()
 
     @Test
+    fun `shell quote preserves one literal argument`() {
+        val value = "path with spaces and 'quotes'; echo unsafe"
+
+        val output = shell.runCommand("printf %s ${shellQuote(value)}")
+
+        assertEquals(value, output)
+    }
+
+    @Test
     fun `getConnectedAndroidDevices parses adb output`() {
         val output = (
             "List of devices attached\n" +

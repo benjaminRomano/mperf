@@ -35,35 +35,39 @@ fun main(args: Array<String>) {
     val config = readConfig()
     val shell = ShellExecutor()
     val httpClient = HttpClient(Java)
+    try {
+        // TODO: Set up real DI at some point
+        val profileOpener = ProfileOpener(shell, config.traceHostUrl, config.perfettoUrl, httpClient)
+        val profilerExecutor =
+            ProfilerExecutorImpl(
+                mapOf(
+                    ProfilerFormat.PERFETTO to { shell, device, options ->
+                        PerfettoProfiler(shell, Adb(device, shell), options as PerfettoOptions)
+                    },
+                    ProfilerFormat.SIMPLEPERF to { shell, device, options ->
+                        SimpleperfProfiler(shell, Adb(device, shell), options as SimpleperfOptions)
+                    },
+                    ProfilerFormat.METHOD to { shell, device, _ -> MethodProfiler(Adb(device, shell)) },
+                    ProfilerFormat.INSTRUMENTS to { shell, device, options ->
+                        (options as InstrumentsOptions).let {
+                            InstrumentsProfiler(
+                                XcodeUtils(device, shell),
+                                InstrumentsProfilerOptions(
+                                    it.template,
+                                    it.instruments,
+                                    it.timeLimit,
+                                ),
+                            )
+                        }
+                    },
+                ),
+                profileOpener,
+            )
 
-    // TODO: Set up real DI at some point
-    val profileOpener = ProfileOpener(shell, config.traceHostUrl, config.perfettoUrl, httpClient)
-    val profilerExecutor =
-        ProfilerExecutorImpl(
-            mapOf(
-                ProfilerFormat.PERFETTO to { shell, device, options ->
-                    PerfettoProfiler(shell, Adb(device, shell), options as PerfettoOptions)
-                },
-                ProfilerFormat.SIMPLEPERF to { shell, device, options ->
-                    SimpleperfProfiler(shell, Adb(device, shell), options as SimpleperfOptions)
-                },
-                ProfilerFormat.METHOD to { shell, device, _ -> MethodProfiler(Adb(device, shell)) },
-                ProfilerFormat.INSTRUMENTS to { shell, device, options ->
-                    (options as InstrumentsOptions).let {
-                        InstrumentsProfiler(
-                            XcodeUtils(device, shell),
-                            InstrumentsProfilerOptions(
-                                it.template,
-                                it.instruments,
-                            ),
-                        )
-                    }
-                },
-            ),
-            profileOpener,
-        )
-
-    createRootCommand(shell, config, profilerExecutor, profileOpener).main(args)
+        createRootCommand(shell, config, profilerExecutor, profileOpener).main(args)
+    } finally {
+        httpClient.close()
+    }
 }
 
 /**
@@ -94,38 +98,47 @@ fun createRootCommand(
  * Perform string splitting as shell would do
  * Inspired by https://docs.python.org/3/library/shlex.html
  */
-private fun shlexSplit(input: String): Array<String> {
+internal fun shlexSplit(input: String): Array<String> {
     val tokens = mutableListOf<String>()
-    val sb = StringBuilder()
+    val token = StringBuilder()
     var inSingle = false
     var inDouble = false
+    var escaped = false
+    var tokenStarted = false
     var i = 0
     while (i < input.length) {
         val c = input[i]
-        when (c) {
-            '\'' ->
-                if (!inDouble) {
-                    inSingle = !inSingle
-                } else {
-                    sb.append(c)
+        when {
+            escaped -> {
+                token.append(c)
+                tokenStarted = true
+                escaped = false
+            }
+            c == '\\' && !inSingle -> escaped = true
+            c == '\'' && !inDouble -> {
+                inSingle = !inSingle
+                tokenStarted = true
+            }
+            c == '"' && !inSingle -> {
+                inDouble = !inDouble
+                tokenStarted = true
+            }
+            c.isWhitespace() && !inSingle && !inDouble -> {
+                if (tokenStarted) {
+                    tokens.add(token.toString())
+                    token.clear()
+                    tokenStarted = false
                 }
-            '"' ->
-                if (!inSingle) {
-                    inDouble = !inDouble
-                } else {
-                    sb.append(c)
-                }
-            ' ' ->
-                if (inSingle || inDouble) {
-                    sb.append(c)
-                } else if (sb.isNotEmpty()) {
-                    tokens.add(sb.toString())
-                    sb.clear()
-                }
-            else -> sb.append(c)
+            }
+            else -> {
+                token.append(c)
+                tokenStarted = true
+            }
         }
         i++
     }
-    if (sb.isNotEmpty()) tokens.add(sb.toString())
+    require(!escaped) { "Trailing escape in command line" }
+    require(!inSingle && !inDouble) { "Unterminated quote in command line" }
+    if (tokenStarted) tokens.add(token.toString())
     return tokens.toTypedArray()
 }

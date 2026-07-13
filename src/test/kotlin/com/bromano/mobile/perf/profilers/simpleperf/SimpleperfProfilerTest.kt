@@ -19,6 +19,7 @@ import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import java.nio.file.Files
 import java.nio.file.Path
+import kotlin.test.assertFalse
 
 class SimpleperfProfilerTest {
     private lateinit var shell: Shell
@@ -51,6 +52,35 @@ class SimpleperfProfilerTest {
     }
 
     @Test
+    fun `converter failure removes partial output`() {
+        val tmpHome = Files.createTempDirectory("converter-failure-home")
+        originalHome = System.getProperty("user.home")
+        System.setProperty("user.home", tmpHome.toString())
+        val scripts = Files.createDirectories(tmpHome.resolve(".mperf/simpleperf"))
+        Files.writeString(scripts.resolve(".mperf-version"), "fc2494a2abd7ab21774d03deb09c1362bbb0bba8")
+        Files.writeString(scripts.resolve("gecko_profile_generator.py"), "")
+        whenever(shell.runCommand(argThat { contains("python3") }, any()))
+            .thenThrow(IllegalStateException("converter failed"))
+
+        class OptionsCommand : CliktCommand() {
+            lateinit var captured: com.bromano.mobile.perf.ProfilerOptionGroup
+            private val profiler by androidProfilerOptions()
+
+            override fun run() {
+                captured = profiler
+            }
+        }
+
+        val options = OptionsCommand().apply { parse(listOf("--format", "simpleperf")) }.captured as SimpleperfOptions
+        val output = Files.createTempFile("partial", ".json.gz")
+
+        assertThrows<IllegalStateException> {
+            SimpleperfProfiler(shell, adb, options).convertToGecko(options, Files.createTempFile("perf", ".data"), output)
+        }
+        assertFalse(Files.exists(output))
+    }
+
+    @Test
     fun executes_simpleperf_non_rootable_and_converts() {
         // Arrange: make pidof return a pid once, then blank for shutdown check
         whenever(
@@ -73,6 +103,10 @@ class SimpleperfProfilerTest {
         originalHome = System.getProperty("user.home")
         System.setProperty("user.home", tmpHome.toString())
         Files.createDirectories(tmpHome.resolve(".mperf/simpleperf"))
+        Files.writeString(tmpHome.resolve(".mperf/simpleperf/.mperf-version"), "fc2494a2abd7ab21774d03deb09c1362bbb0bba8")
+        Files.writeString(tmpHome.resolve(".mperf/simpleperf/gecko_profile_generator.py"), "")
+        val symfs = Files.createDirectories(tmpHome.resolve("symbols with spaces"))
+        val mapping = Files.writeString(tmpHome.resolve("mapping with spaces.txt"), "")
 
         // Build a parsed SimpleperfOptions via a tiny Clikt command
         class OptsCmd : CliktCommand() {
@@ -84,7 +118,17 @@ class SimpleperfProfilerTest {
             }
         }
         val cmd = OptsCmd()
-        cmd.parse(listOf("--format", "simpleperf"))
+        cmd.parse(
+            listOf(
+                "--format",
+                "simpleperf",
+                "--symfs",
+                symfs.toString(),
+                "--mapping",
+                mapping.toString(),
+                "--show-art-frames",
+            ),
+        )
         val options = cmd.captured as SimpleperfOptions
         val collector = SimpleperfProfiler(shell, adb, options, awaitStop = { /* end immediately */ })
 
@@ -110,7 +154,17 @@ class SimpleperfProfilerTest {
         verify(shell).runCommand(argThat { contains("adb ") && contains(" pull ") && contains("/data/local/tmp/perf.data") }, any())
 
         // Assert: gecko converter was invoked
-        verify(shell, times(1)).runCommand(argThat { contains("python3") && contains("gecko_profile_generator.py") }, any())
+        verify(shell, times(1)).runCommand(
+            argThat {
+                contains("python3") &&
+                    contains("gecko_profile_generator.py") &&
+                    contains("--show-art-frames") &&
+                    contains("--symfs '$symfs'") &&
+                    contains("--proguard-mapping-file '$mapping'") &&
+                    !contains("| gzip")
+            },
+            any(),
+        )
     }
 
     @Test
@@ -135,7 +189,7 @@ class SimpleperfProfilerTest {
                 },
                 any(),
             ),
-        ).thenReturn("545d135f070494bba7b5fe4b09046682  /data/local/tmp/simpleperf")
+        ).thenReturn("2dca6449abf98f651135f544ce46a1cd  /data/local/tmp/simpleperf")
 
         // pidof once, then blank to indicate shutdown
         whenever(
@@ -159,6 +213,8 @@ class SimpleperfProfilerTest {
         if (originalHome == null) originalHome = prevHome
         System.setProperty("user.home", tmpHome.toString())
         Files.createDirectories(tmpHome.resolve(".mperf/simpleperf"))
+        Files.writeString(tmpHome.resolve(".mperf/simpleperf/.mperf-version"), "fc2494a2abd7ab21774d03deb09c1362bbb0bba8")
+        Files.writeString(tmpHome.resolve(".mperf/simpleperf/gecko_profile_generator.py"), "")
 
         // Build a parsed SimpleperfOptions via a tiny Clikt command
         class OptsCmd2 : CliktCommand() {
@@ -239,14 +295,15 @@ class SimpleperfProfilerTest {
                 argThat {
                     contains("adb") &&
                         contains("am instrument") &&
-                        contains("androidx.benchmark.profiling.mode StackSampling")
+                        contains("androidx.benchmark.profiling.mode \"StackSampling\"")
                 },
                 any(),
             ),
         ).thenReturn(
             "INSTRUMENTATION_STATUS: additionalTestOutputFile_LoginBenchmark_loginByIntent_iter000=" +
                 "/storage/emulated/0/Android/media/com.example.macrobenchmark/" +
-                "LoginBenchmark_loginByIntent_iter000.perfetto-trace",
+                "LoginBenchmark_loginByIntent_iter000.perfetto-trace\n" +
+                "INSTRUMENTATION_CODE: -1",
         )
 
         class OptsCmd4 : CliktCommand() {
@@ -274,7 +331,7 @@ class SimpleperfProfilerTest {
             argThat {
                 contains("adb") &&
                     contains("am instrument") &&
-                    contains("androidx.benchmark.profiling.mode StackSampling")
+                    contains("androidx.benchmark.profiling.mode \"StackSampling\"")
             },
             any(),
         )

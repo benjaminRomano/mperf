@@ -15,6 +15,7 @@ class DefaultPerfettoConfigTest {
     fun `createPerfettoConfig builds expected data sources and categories`() {
         val adb =
             mock<Adb> {
+                on { sdkVersion } doReturn 29
                 on { shell(eq("atrace --list_categories | awk '{print $1;}'"), any(), any()) } doReturn (
                     "am\nwm\nMadeUp\n"
                 )
@@ -49,9 +50,21 @@ class DefaultPerfettoConfigTest {
         // not present because not in ATRACE_CATEGORIES
         assertTrue(!atraceCfg.atraceCategoriesList.contains("MadeUp"))
 
-        // atraceApps include lmkd and package
-        assertTrue(atraceCfg.atraceAppsList.contains("lmkd"))
-        assertTrue(atraceCfg.atraceAppsList.contains("com.example.app"))
+        assertEquals(listOf("*"), atraceCfg.atraceAppsList)
+        assertTrue(atraceCfg.compactSched.enabled)
+
+        val sysStats =
+            cfg.dataSourcesList
+                .first { it.config.name == "linux.sys_stats" }
+                .config.sysStatsConfig
+        assertEquals(1000, sysStats.meminfoPeriodMs)
+        assertTrue(sysStats.meminfoCountersList.contains(PerfettoConfig.MeminfoCounters.MEMINFO_MEM_AVAILABLE))
+
+        val processStats =
+            cfg.dataSourcesList
+                .first { it.config.name == "linux.process_stats" }
+                .config.processStatsConfig
+        assertEquals(10000, processStats.procStatsPollMs)
 
         val trackEvent =
             cfg.dataSourcesList

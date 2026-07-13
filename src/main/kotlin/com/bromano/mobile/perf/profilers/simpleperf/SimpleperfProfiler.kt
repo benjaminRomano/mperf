@@ -2,24 +2,33 @@ package com.bromano.mobile.perf.profilers.simpleperf
 
 import com.bromano.mobile.perf.SimpleperfOptions
 import com.bromano.mobile.perf.profilers.Profiler
+import com.bromano.mobile.perf.profilers.buildBenchmarkInstrumentationCommand
+import com.bromano.mobile.perf.profilers.findNewBenchmarkOutput
+import com.bromano.mobile.perf.profilers.validateBenchmarkInstrumentationOutput
 import com.bromano.mobile.perf.utils.Adb
 import com.bromano.mobile.perf.utils.Logger
 import com.bromano.mobile.perf.utils.Shell
 import com.bromano.mobile.perf.utils.downloadVerified
+import com.bromano.mobile.perf.utils.sha256
+import com.bromano.mobile.perf.utils.shellQuote
 import com.github.ajalt.clikt.core.PrintMessage
 import java.io.File
+import java.net.URI
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
+import java.security.MessageDigest
 import java.util.Base64
 import java.util.concurrent.TimeUnit
+import java.util.zip.GZIPOutputStream
 import kotlin.io.path.createTempFile
-import kotlin.io.path.exists
 
 private const val SIMPLEPERF_SIDELOAD_PATH = "/data/local/tmp/simpleperf"
-private const val SIMPLEPERF_PREBUILTS_COMMIT = "77a9d28fd775ac32868475335d5786fdf99a9b80"
+private const val SIMPLEPERF_PREBUILTS_COMMIT = "829c2351dfc33886743931721b67b959c50a40ab"
 private const val SIMPLEPERF_SCRIPTS_ARCHIVE_COMMIT = "fc2494a2abd7ab21774d03deb09c1362bbb0bba8"
-private const val SIMPLEPERF_SCRIPTS_ARCHIVE_SHA256 = "fbb1228a74315941ef36c4510ba4b88726ea81fe29ee5e5e966b2ac85dd913c4"
+private const val SIMPLEPERF_SCRIPTS_TREE_SHA256 = "deec6c145f678bc72897e10bd2c1eba96fff1a3b7044d504db030eb37b6abf8e"
 private const val BENCHMARK_STACK_SAMPLING_MODE = "StackSampling"
-private const val INSTRUMENTATION_ADDITIONAL_OUTPUT_PREFIX = "INSTRUMENTATION_STATUS: additionalTestOutputFile_"
 
 private data class SimpleperfBinaryInfo(
     val url: String,
@@ -28,18 +37,15 @@ private data class SimpleperfBinaryInfo(
 )
 
 /**
- * Collects a simpleperf profile using NDK simpleperf scripts (app_profiler.py).
- *
- * Requirements:
- * - ANDROID_NDK_HOME must be set and contain simpleperf/app_profiler.py
- * - Device selection is controlled via ANDROID_SERIAL environment variable
+ * Collects a simpleperf profile on-device and converts it to a Gecko profile on the host.
  */
 class SimpleperfProfiler(
     private val shell: Shell,
     private val adb: Adb,
     private val options: SimpleperfOptions,
-    private val awaitStop: () -> Unit = { readlnOrNull() },
+    private val startupTimeoutMs: Long = TimeUnit.SECONDS.toMillis(10),
     private val shutdownTimeoutMs: Long = TimeUnit.SECONDS.toMillis(60),
+    private val awaitStop: () -> Unit = { readlnOrNull() },
 ) : Profiler {
     override fun execute(
         packageName: String,
@@ -71,15 +77,13 @@ class SimpleperfProfiler(
         Logger.debug("Running simpleperf command: $simpleperfCommand")
 
         val proc = shell.startProcess(simpleperfCommand)
+        val pid = waitForSimpleperfStart()
 
         Logger.info("Press any key to end tracing...")
         awaitStop()
 
         Logger.info("Waiting for simpleperf to shutdown...")
 
-        val pid =
-            adb.pidof("simpleperf")
-                ?: throw IllegalStateException("Couldn't find pid for `simpleperf`. Check adb logs for simpleperf failures")
         adb.shell("kill -2 $pid", withRoot = true)
 
         proc.destroy()
@@ -89,6 +93,15 @@ class SimpleperfProfiler(
         adb.pull(onDevicePerfData, perfData.toString())
 
         convertToGecko(options, perfData, output)
+    }
+
+    private fun waitForSimpleperfStart(): String {
+        val deadline = System.currentTimeMillis() + startupTimeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            adb.pidof("simpleperf")?.let { return it }
+            Thread.sleep(100L)
+        }
+        throw IllegalStateException("Couldn't start `simpleperf` within ${startupTimeoutMs}ms. Check adb logs for failures")
     }
 
     /**
@@ -120,20 +133,20 @@ class SimpleperfProfiler(
                 "arm64-v8a" to
                     SimpleperfBinaryInfo(
                         "https://android.googlesource.com/platform/prebuilts/simpleperf/+/$SIMPLEPERF_PREBUILTS_COMMIT/bin/android/arm64/simpleperf?format=TEXT",
-                        "545d135f070494bba7b5fe4b09046682",
-                        "1cf95ed65cff9f6030f90b50dd0e2251725305d686af1b25a91eb51891074f76",
+                        "2dca6449abf98f651135f544ce46a1cd",
+                        "bf6d50d8ece60f5bc9c21aa3559993a99f868c0501040aeab3af0b911cb6a200",
                     ),
                 "armeabi-v7a" to
                     SimpleperfBinaryInfo(
                         "https://android.googlesource.com/platform/prebuilts/simpleperf/+/$SIMPLEPERF_PREBUILTS_COMMIT/bin/android/arm/simpleperf?format=TEXT",
-                        "a3b40bbf6ff8d6e8b49facc41f96e890",
-                        "aba36e7925dfd586501bc112a4b7e113c64e5af51b3d8ec91e61797e7b3d9951",
+                        "fb62560abbe05af5c5a25a7959ded6ba",
+                        "6c337d680bf287d417a0371694eb273662587eae86676758999808eedf651496",
                     ),
                 "x86_64" to
                     SimpleperfBinaryInfo(
                         "https://android.googlesource.com/platform/prebuilts/simpleperf/+/$SIMPLEPERF_PREBUILTS_COMMIT/bin/android/x86_64/simpleperf?format=TEXT",
-                        "0923414737427e2db3b8aa5ae29af9e0",
-                        "c35ac8e3ff043375396e5cf12ef825e4b4f76b6ed05a86d7ad8d89547ff5fad4",
+                        "1cb22468f644d35abb4a137caa785250",
+                        "3bf255f996fc80426fc1ab90cf3bd28d845f3f6fc69e02cd5b4f6a11f65ae54c",
                     ),
             )
 
@@ -164,31 +177,46 @@ class SimpleperfProfiler(
     /**
      * Convert perf data to Gecko format used by Firefox Profiler.
      */
-    private fun convertToGecko(
+    internal fun convertToGecko(
         simpleperfOptions: SimpleperfOptions,
         input: Path,
         output: Path,
     ) {
         val geckoConverter = getSimpleperfScripts().resolve("gecko_profile_generator.py")
 
-        val symFsOption = simpleperfOptions.symfs?.let { "--symfs $it" } ?: ""
-        val mappingOption = simpleperfOptions.mapping?.let { "--proguard-mapping-file $it" } ?: ""
-        val showArtFrames = if (simpleperfOptions.showArtFrames) "--short_art_frames" else ""
+        val symFsOption = simpleperfOptions.symfs?.let { "--symfs ${shellQuote(it.toString())}" } ?: ""
+        val mappingOption = simpleperfOptions.mapping?.let { "--proguard-mapping-file ${shellQuote(it.toString())}" } ?: ""
+        val showArtFrames = if (simpleperfOptions.showArtFrames) "--show-art-frames" else ""
 
         // Ensure regexes are escaped
         val removeMethodArgs =
             if (simpleperfOptions.removeMethods.isNotEmpty()) {
-                "--remove-method ${simpleperfOptions.removeMethods.joinToString(" ") { "\"$it\"" }}"
+                "--remove-method ${simpleperfOptions.removeMethods.joinToString(" ") { shellQuote(it) }}"
             } else {
                 ""
             }
 
         // TODO: We may want to ensure that user has recent enough version of NDK that contains this fix:
         //  https://android.googlesource.com/platform//system/extras/+/5cd09ef39d97a6332d12031ecafe2366f42220f7
-        val command = "python3 $geckoConverter -i $input $symFsOption $mappingOption $showArtFrames $removeMethodArgs | gzip > $output"
-        Logger.debug("Converting perf data to gecko (command: $command")
+        val uncompressedProfile = Files.createTempFile("mperf-simpleperf", ".json")
+        val command =
+            "python3 ${shellQuote(geckoConverter.toString())} -i ${shellQuote(input.toString())} " +
+                "$symFsOption $mappingOption $showArtFrames $removeMethodArgs > ${shellQuote(uncompressedProfile.toString())}"
+        Logger.debug("Converting perf data to gecko (command: $command)")
 
-        shell.runCommand(command)
+        try {
+            shell.runCommand(command)
+            Files.newInputStream(uncompressedProfile).use { inputStream ->
+                Files.newOutputStream(output).use { outputStream ->
+                    GZIPOutputStream(outputStream).use(inputStream::copyTo)
+                }
+            }
+        } catch (error: Exception) {
+            Files.deleteIfExists(output)
+            throw error
+        } finally {
+            Files.deleteIfExists(uncompressedProfile)
+        }
     }
 
     /**
@@ -196,25 +224,79 @@ class SimpleperfProfiler(
      */
     private fun getSimpleperfScripts(): Path {
         val simpleperfHome = Path.of(System.getProperty("user.home")).resolve(".mperf/simpleperf")
+        val versionFile = simpleperfHome.resolve(".mperf-version")
 
-        if (simpleperfHome.exists()) {
+        if (versionFile
+                .toFile()
+                .takeIf { it.isFile }
+                ?.readText()
+                ?.trim() == SIMPLEPERF_SCRIPTS_ARCHIVE_COMMIT &&
+            simpleperfHome.resolve("gecko_profile_generator.py").toFile().isFile
+        ) {
             return simpleperfHome
         }
 
         val simpleperfArchive =
             "https://android.googlesource.com/platform/system/extras/+archive/$SIMPLEPERF_SCRIPTS_ARCHIVE_COMMIT/simpleperf/scripts.tar.gz"
-        val tempFile =
+        val tempArchive =
             File.createTempFile("simpleperf.tar.gz", null).apply {
                 deleteOnExit()
             }
 
         Logger.info("Installing simpleperf scripts...")
-        downloadVerified(simpleperfArchive, tempFile.toPath(), SIMPLEPERF_SCRIPTS_ARCHIVE_SHA256)
+        URI(simpleperfArchive).toURL().openStream().use { input ->
+            Files.copy(input, tempArchive.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        }
 
-        simpleperfHome.toFile().mkdirs()
-        shell.runCommand("tar -xzf $tempFile -C $simpleperfHome")
+        val archiveEntries = shell.runCommand("tar -tzf ${shellQuote(tempArchive.toString())}").lineSequence()
+        require(
+            archiveEntries.all { entry ->
+                entry.isBlank() || Path.of(entry).let { !it.isAbsolute && !it.normalize().startsWith("..") }
+            },
+        ) { "Simpleperf scripts archive contains an unsafe path" }
+        require(
+            shell
+                .runCommand("tar -tvzf ${shellQuote(tempArchive.toString())}")
+                .lineSequence()
+                .filter { it.isNotBlank() }
+                .all { it.first() == '-' || it.first() == 'd' },
+        ) { "Simpleperf scripts archive contains links or unsupported entries" }
+
+        Files.createDirectories(simpleperfHome.parent)
+        val extractedScripts = Files.createTempDirectory(simpleperfHome.parent, "simpleperf-install-")
+        try {
+            shell.runCommand("tar -xzf ${shellQuote(tempArchive.toString())} -C ${shellQuote(extractedScripts.toString())}")
+            val actualTreeSha256 = calculateTreeSha256(extractedScripts)
+            require(actualTreeSha256 == SIMPLEPERF_SCRIPTS_TREE_SHA256) {
+                "Checksum verification failed for Simpleperf scripts at $SIMPLEPERF_SCRIPTS_ARCHIVE_COMMIT: " +
+                    "expected $SIMPLEPERF_SCRIPTS_TREE_SHA256, got $actualTreeSha256"
+            }
+
+            simpleperfHome.toFile().deleteRecursively()
+            Files.move(extractedScripts, simpleperfHome)
+            versionFile.toFile().writeText("$SIMPLEPERF_SCRIPTS_ARCHIVE_COMMIT\n")
+        } finally {
+            extractedScripts.toFile().deleteRecursively()
+        }
 
         return simpleperfHome
+    }
+
+    private fun calculateTreeSha256(root: Path): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        val files =
+            Files.walk(root).use { paths ->
+                paths
+                    .filter(Files::isRegularFile)
+                    .toList()
+                    .sortedBy { root.relativize(it).toString() }
+            }
+        files.forEach { file ->
+            val relativePath = root.relativize(file).joinToString("/")
+            val manifestLine = "${sha256(file)}  ./$relativePath\n"
+            digest.update(manifestLine.toByteArray(StandardCharsets.UTF_8))
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
     override fun executeTest(
@@ -225,36 +307,36 @@ class SimpleperfProfiler(
     ) {
         Logger.info("Running performance test: $testCase")
 
+        val outputDir = adb.getDirUsableByAppAndShell(instrumentationRunner.substringBefore("/"))
+        val filesBeforeRun = adb.ls(outputDir, ignoreErrors = true).toSet()
         val instrumentationOutput =
             adb.shell(
-                buildString {
-                    append("am instrument -w -r ")
-                    append("-e class \"$testCase\" ")
-                    append("-e androidx.benchmark.suppressErrors \"EMULATOR\" ")
-                    append("-e androidx.benchmark.dryRunMode.enable true ")
-                    append("-e androidx.benchmark.profiling.mode $BENCHMARK_STACK_SAMPLING_MODE ")
-                    append(instrumentationRunner)
-                },
+                buildBenchmarkInstrumentationCommand(
+                    instrumentationRunner = instrumentationRunner,
+                    testCase = testCase,
+                    outputDirectory = outputDir,
+                    arguments =
+                        linkedMapOf(
+                            "androidx.benchmark.suppressErrors" to "EMULATOR",
+                            "androidx.benchmark.dryRunMode.enable" to "true",
+                            "androidx.benchmark.profiling.mode" to BENCHMARK_STACK_SAMPLING_MODE,
+                        ),
+                ),
             )
+        validateBenchmarkInstrumentationOutput(instrumentationOutput)
 
         Logger.info("Test complete. Pulling trace...")
 
-        val outputDir = adb.getDirUsableByAppAndShell(instrumentationRunner.substringBefore("/"))
         val trace =
-            findBenchmarkTracePath(instrumentationOutput)
-                ?: adb
-                    .ls(outputDir)
-                    .firstOrNull { it.endsWith(".perfetto-trace") }
-                    ?.let { "$outputDir$it" }
+            findNewBenchmarkOutput(
+                instrumentationOutput = instrumentationOutput,
+                filesBeforeRun = filesBeforeRun,
+                filesAfterRun = adb.ls(outputDir),
+                outputDirectory = outputDir,
+                matches = { it.endsWith(".perfetto-trace") },
+            )
                 ?: throw PrintMessage("No simpleperf trace found by instrumentation test in $outputDir", printError = true)
 
         adb.pull(trace, output.toString())
     }
-
-    private fun findBenchmarkTracePath(instrumentationOutput: String): String? =
-        instrumentationOutput
-            .lineSequence()
-            .filter { it.startsWith(INSTRUMENTATION_ADDITIONAL_OUTPUT_PREFIX) }
-            .map { it.substringAfter("=").trim() }
-            .firstOrNull { it.endsWith(".perfetto-trace") }
 }

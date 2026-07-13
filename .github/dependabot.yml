@@ -1,0 +1,39 @@
+version: 2
+updates:
+  - package-ecosystem: gradle
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      kotlin-and-kotlinx:
+        patterns:
+          - "org.jetbrains.kotlin*"
+          - "org.jetbrains.kotlinx*"
+      ktor:
+        patterns:
+          - "io.ktor*"
+      protobuf:
+        patterns:
+          - "com.google.protobuf*"
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: gradle
+    directory: /integration-fixtures/android
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      android-fixture:
+        patterns:
+          - "*"

@@ -1,6 +1,7 @@
 package com.bromano.mobile.perf.commands.android
 
 import com.bromano.mobile.perf.Config
+import com.bromano.mobile.perf.ProfilerFormat
 import com.bromano.mobile.perf.androidProfilerOptions
 import com.bromano.mobile.perf.profilers.ProfilerExecutor
 import com.bromano.mobile.perf.utils.ProfileViewer
@@ -43,9 +44,9 @@ class AndroidStartCommand(
                     "trace_out",
                     "${profilerOption.format.name.lowercase()}-${LocalDateTime.now().format(
                         DateTimeFormatter.ofPattern("yyyy-MM-dd-HH-mm"),
-                    )}.trace",
+                    )}${defaultStartOutputSuffix(profilerOption.format)}",
                 )
-        finalOutputPath.parent.toFile().mkdirs()
+        finalOutputPath.parent?.toFile()?.mkdirs()
 
         val finalPackageName =
             packageName ?: config.android?.packageName
@@ -66,3 +67,11 @@ class AndroidStartCommand(
         )
     }
 }
+
+private fun defaultStartOutputSuffix(format: ProfilerFormat): String =
+    when (format) {
+        ProfilerFormat.PERFETTO -> ".perfetto-trace"
+        ProfilerFormat.SIMPLEPERF -> ".json.gz"
+        ProfilerFormat.METHOD -> ".trace"
+        ProfilerFormat.INSTRUMENTS -> error("Instruments is not an Android profiler format")
+    }

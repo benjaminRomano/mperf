@@ -14,6 +14,7 @@ import kotlin.io.path.exists
 data class InstrumentsProfilerOptions(
     val template: String = "Time Profiler",
     val instruments: List<String> = emptyList(),
+    val timeLimit: String? = null,
 )
 
 /**
@@ -23,13 +24,16 @@ class InstrumentsProfiler(
     private val xcodeUtils: XcodeUtils,
     private val options: InstrumentsProfilerOptions,
 ) : Profiler {
+    override val targetProcessId: Long?
+        get() = xcodeUtils.lastRecordedProcessId
+
     @OptIn(ExperimentalPathApi::class)
     override fun execute(
         packageName: String,
         output: Path,
     ) {
         // Ensure output directory exists
-        output.parent.toFile().mkdirs()
+        output.parent?.toFile()?.mkdirs()
         if (output.exists()) {
             output.deleteRecursively()
         }
@@ -39,6 +43,7 @@ class InstrumentsProfiler(
             instruments = options.instruments,
             bundleIdentifier = packageName,
             outputPath = output.toString(),
+            timeLimit = options.timeLimit,
         )
 
         if (!output.toFile().exists()) {
@@ -53,7 +58,5 @@ class InstrumentsProfiler(
         instrumentationRunner: String,
         testCase: String,
         output: Path,
-    ) {
-        // TODO: Implement this next
-    }
+    ): Unit = throw UnsupportedOperationException("Instruments does not support Android instrumentation test collection")
 }

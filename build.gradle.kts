@@ -1,20 +1,27 @@
 import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
 import com.google.protobuf.gradle.id
+import org.gradle.api.file.DuplicatesStrategy
+import org.gradle.api.tasks.bundling.AbstractArchiveTask
 
 plugins {
-    kotlin("jvm") version "2.3.20"
-    kotlin("plugin.serialization") version "2.3.20"
-    kotlin("plugin.allopen") version "2.3.20"
-    id("com.google.protobuf") version "0.9.6"
+    kotlin("jvm") version "2.4.0"
+    kotlin("plugin.serialization") version "2.4.0"
+    id("com.google.protobuf") version "0.10.0"
     id("org.jlleitschuh.gradle.ktlint") version "14.2.0"
-    id("com.gradleup.shadow") version "9.4.1"
+    id("com.gradleup.shadow") version "9.5.1"
+    id("me.champeau.jmh") version "0.7.3"
     application
 }
 
 group = "com.bromano"
 
-// Align project version with the release tag when provided
-version = providers.gradleProperty("releaseVersion").getOrElse("1.0-SNAPSHOT")
+val releaseVersion = providers.gradleProperty("releaseVersion")
+releaseVersion.orNull?.let {
+    require(it.matches(Regex("\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?"))) {
+        "releaseVersion must be a SemVer value without a leading 'v': $it"
+    }
+}
+version = releaseVersion.getOrElse("1.0-SNAPSHOT")
 
 application { mainClass.set("com.bromano.mobile.perf.MainKt") }
 
@@ -28,29 +35,35 @@ val forwardedTestSystemProperties =
         "mperf.integration.instrumentation",
         "mperf.integration.package",
         "mperf.integration.testCase",
+        "mperf.integration.activity",
+        "mperf.integration.ios.enabled",
+        "mperf.integration.ios.device",
+        "mperf.integration.ios.bundle",
+        "mperf.integration.ios.appPath",
     )
 
 dependencies {
+    implementation(platform("org.jetbrains.kotlin:kotlin-bom:2.4.0"))
     implementation("com.github.ajalt.clikt:clikt:5.1.0")
     implementation("com.github.ajalt.clikt:clikt-markdown:5.1.0")
-    implementation("com.google.protobuf:protobuf-kotlin:4.32.0")
-    implementation("com.google.protobuf:protobuf-java:4.32.0")
-    implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.20.0")
-    implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.20.0")
-    implementation("io.ktor:ktor-client-core:3.4.1")
-    implementation("io.ktor:ktor-client-java:3.4.1")
+    implementation("com.google.protobuf:protobuf-kotlin:4.35.1")
+    implementation("com.google.protobuf:protobuf-java:4.35.1")
+    implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.22.1")
+    implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.22.1")
+    implementation("io.ktor:ktor-client-core:3.5.1")
+    implementation("io.ktor:ktor-client-java:3.5.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
+    implementation("com.google.code.gson:gson:2.14.0")
 
-    runtimeOnly("org.slf4j:slf4j-nop:2.0.17")
+    runtimeOnly("org.slf4j:slf4j-nop:2.0.18")
 
     // Testing dependencies
     testImplementation(kotlin("test"))
-    testImplementation("org.junit.jupiter:junit-jupiter:5.14.3")
+    testImplementation("org.junit.jupiter:junit-jupiter:6.1.2")
     testImplementation("org.mockito.kotlin:mockito-kotlin:6.3.0")
     testImplementation("org.mockito:mockito-core:5.23.0")
     mockitoAgent("org.mockito:mockito-core:5.23.0") { isTransitive = false }
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.10.0")
-    implementation("com.google.code.gson:gson:2.13.2")
 }
 
 tasks.test { useJUnitPlatform() }
@@ -58,7 +71,7 @@ tasks.test { useJUnitPlatform() }
 kotlin { jvmToolchain(21) }
 
 protobuf {
-    protoc { artifact = "com.google.protobuf:protoc:4.32.0" }
+    protoc { artifact = "com.google.protobuf:protoc:4.35.1" }
     generateProtoTasks { all().forEach { it.builtins { id("kotlin") } } }
 }
 
@@ -69,7 +82,33 @@ sourceSets.main {
     )
 }
 
+sourceSets.named("jmh") {
+    resources.srcDir("src/test/resources")
+}
+
+jmh {
+    jmhVersion.set("1.37")
+    includes.set(listOf(".*InstrumentsConverterBenchmark.*"))
+    warmupIterations.set(1)
+    iterations.set(3)
+    fork.set(1)
+    timeOnIteration.set("1s")
+    timeUnit.set("ms")
+}
+
 tasks {
+    withType<AbstractArchiveTask>().configureEach {
+        isPreserveFileTimestamps = false
+        isReproducibleFileOrder = true
+    }
+
+    withType<ShadowJar>().configureEach {
+        // Shadow transforms Kotlin module metadata, so duplicate resources must reach the transformer.
+        filesMatching("META-INF/*.kotlin_module") {
+            duplicatesStrategy = DuplicatesStrategy.INCLUDE
+        }
+    }
+
     // Generate CLI docs in Markdown: ./gradlew generateDocs
     register<JavaExec>("generateDocs") {
         group = "documentation"

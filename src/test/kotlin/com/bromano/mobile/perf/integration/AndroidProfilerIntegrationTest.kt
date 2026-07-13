@@ -4,18 +4,21 @@ import com.bromano.mobile.perf.PerfettoOptions
 import com.bromano.mobile.perf.ProfilerOptionGroup
 import com.bromano.mobile.perf.SimpleperfOptions
 import com.bromano.mobile.perf.androidProfilerOptions
+import com.bromano.mobile.perf.profilers.method.MethodProfiler
 import com.bromano.mobile.perf.profilers.perfetto.PerfettoProfiler
 import com.bromano.mobile.perf.profilers.simpleperf.SimpleperfProfiler
 import com.bromano.mobile.perf.utils.Adb
 import com.bromano.mobile.perf.utils.ShellExecutor
 import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.core.parse
+import com.google.gson.JsonParser
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Timeout
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
+import java.util.zip.GZIPInputStream
 import kotlin.io.path.createTempFile
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -29,19 +32,19 @@ class AndroidProfilerIntegrationTest {
     private val instrumentationRunner =
         System.getProperty(
             "mperf.integration.instrumentation",
-            "com.example.macrobenchmark/androidx.test.runner.AndroidJUnitRunner",
+            "com.bromano.mperf.fixture.benchmark/androidx.test.runner.AndroidJUnitRunner",
         )
     private val packageName =
-        System.getProperty("mperf.integration.package", "com.example.macrobenchmark.target")
+        System.getProperty("mperf.integration.package", "com.bromano.mperf.fixture")
     private val testCase =
         System.getProperty(
             "mperf.integration.testCase",
-            "com.example.macrobenchmark.benchmark.LoginBenchmark#loginByIntent",
+            "com.bromano.mperf.fixture.benchmark.FixtureBenchmark#startup",
         )
     private val launchableActivity =
         System.getProperty(
             "mperf.integration.activity",
-            "com.example.macrobenchmark.target/.activity.MainActivity",
+            "com.bromano.mperf.fixture/.FixtureActivity",
         )
 
     private fun assumeEnabled() {
@@ -55,8 +58,12 @@ class AndroidProfilerIntegrationTest {
     private fun createAdb(): Adb = Adb(device, shell)
 
     private fun assertBenchmarkSampleAvailable(adb: Adb) {
+        assertTargetAvailable(adb)
         assertContains(adb.findInstrumentationRunners(), instrumentationRunner)
         assertContains(adb.getTests(instrumentationRunner), testCase)
+    }
+
+    private fun assertTargetAvailable(adb: Adb) {
         assertEquals(launchableActivity, adb.resolveLaunchableActivity(packageName))
     }
 
@@ -91,10 +98,26 @@ class AndroidProfilerIntegrationTest {
         assertTrue(Files.size(path) > 0, "expected non-empty output: $path")
     }
 
-    private fun assertGzipFile(path: Path) {
-        Files.newInputStream(path).use { input ->
-            assertEquals(0x1F, input.read())
-            assertEquals(0x8B, input.read())
+    private fun assertGeckoProfile(path: Path) {
+        val profile =
+            Files.newInputStream(path).use { input ->
+                GZIPInputStream(input).bufferedReader().use(JsonParser::parseReader).asJsonObject
+            }
+        assertTrue(profile.getAsJsonArray("threads").size() > 0, "expected Gecko profile to contain threads")
+        profile.getAsJsonArray("threads").forEach { thread ->
+            val samples =
+                thread
+                    .asJsonObject
+                    .getAsJsonObject("samples")
+                    .getAsJsonArray("data")
+            assertTrue(samples.size() > 0)
+        }
+    }
+
+    private fun assertContainsTraceMarkers(path: Path) {
+        val traceBytes = Files.readAllBytes(path).toString(Charsets.ISO_8859_1)
+        FIXTURE_TRACE_MARKERS.forEach { marker ->
+            assertTrue(traceBytes.contains(marker), "expected trace to contain marker: $marker")
         }
     }
 
@@ -125,6 +148,7 @@ class AndroidProfilerIntegrationTest {
         )
 
         assertNonEmptyFile(output)
+        assertContainsTraceMarkers(output)
     }
 
     @Test
@@ -148,11 +172,30 @@ class AndroidProfilerIntegrationTest {
 
     @Test
     @Timeout(value = 10, unit = TimeUnit.MINUTES)
-    fun collects_perfetto_trace_from_ad_hoc_session() {
+    fun collects_method_trace_from_macrobenchmark_sample() {
         assumeEnabled()
 
         val adb = createAdb()
         assertBenchmarkSampleAvailable(adb)
+        val output = createTempFile("macrobenchmark-method", ".trace")
+
+        MethodProfiler(adb).executeTest(
+            packageName = packageName,
+            instrumentationRunner = instrumentationRunner,
+            testCase = testCase,
+            output = output,
+        )
+
+        assertNonEmptyFile(output)
+    }
+
+    @Test
+    @Timeout(value = 10, unit = TimeUnit.MINUTES)
+    fun collects_perfetto_trace_from_ad_hoc_session() {
+        assumeEnabled()
+
+        val adb = createAdb()
+        assertTargetAvailable(adb)
         adb.shell("am force-stop $packageName", ignoreErrors = true)
         val output = createTempFile("adhoc-perfetto", ".perfetto-trace")
 
@@ -164,6 +207,7 @@ class AndroidProfilerIntegrationTest {
         ).execute(packageName, output)
 
         assertNonEmptyFile(output)
+        assertContainsTraceMarkers(output)
     }
 
     @Test
@@ -172,7 +216,7 @@ class AndroidProfilerIntegrationTest {
         assumeEnabled()
 
         val adb = createAdb()
-        assertBenchmarkSampleAvailable(adb)
+        assertTargetAvailable(adb)
         adb.shell("am force-stop $packageName", ignoreErrors = true)
         val output = createTempFile("adhoc-simpleperf", ".json.gz")
 
@@ -184,6 +228,33 @@ class AndroidProfilerIntegrationTest {
         ).execute(packageName, output)
 
         assertNonEmptyFile(output)
-        assertGzipFile(output)
+        assertGeckoProfile(output)
+    }
+
+    @Test
+    @Timeout(value = 10, unit = TimeUnit.MINUTES)
+    fun collects_method_trace_from_ad_hoc_session() {
+        assumeEnabled()
+
+        val adb = createAdb()
+        assertTargetAvailable(adb)
+        adb.shell("am force-stop $packageName", ignoreErrors = true)
+        val output = createTempFile("adhoc-method", ".trace")
+
+        MethodProfiler(
+            adb,
+            awaitStop = { exerciseTargetApp(adb) },
+        ).execute(packageName, output)
+
+        assertNonEmptyFile(output)
+    }
+
+    private companion object {
+        val FIXTURE_TRACE_MARKERS =
+            listOf(
+                "mperf.fixture.sync-workload",
+                "mperf.fixture.async-lifecycle",
+                "mperf.fixture.work-batches",
+            )
     }
 }

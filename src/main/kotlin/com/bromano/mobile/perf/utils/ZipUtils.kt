@@ -20,13 +20,14 @@ object ZipUtils {
         zip: Path,
         dest: Path,
     ) {
-        dest.createDirectories()
+        val normalizedDestination = dest.toAbsolutePath().normalize()
+        normalizedDestination.createDirectories()
 
         ZipFile(zip.toFile()).use { zf ->
             val entries = zf.entries().toList()
             val archiveRoot = detectArchiveRoot(entries)
 
-            val flatten = shouldAutoFlatten(dest, archiveRoot)
+            val flatten = shouldAutoFlatten(normalizedDestination, archiveRoot)
 
             for (e in entries) {
                 val raw = e.name.replace('\\', '/')
@@ -35,7 +36,10 @@ object ZipUtils {
                 val rel = if (flatten) stripRoot(raw, archiveRoot!!) else raw
                 if (rel.isBlank()) continue
 
-                val out = dest.resolve(rel).normalize()
+                val out = normalizedDestination.resolve(rel).normalize()
+                require(out.startsWith(normalizedDestination)) {
+                    "Archive entry escapes destination directory: ${e.name}"
+                }
 
                 if (e.isDirectory || rel.endsWith("/")) {
                     out.createDirectories()
