@@ -168,8 +168,13 @@ class Adb(
         shell("rm${if (force) " -f" else ""} \"$path\"", ignoreErrors = ignoreErrors)
     }
 
-    fun ls(path: String): List<String> =
-        shell("ls -1 \"$path\"")
+    fun ls(path: String): List<String> = ls(path, ignoreErrors = false)
+
+    fun ls(
+        path: String,
+        ignoreErrors: Boolean,
+    ): List<String> =
+        shell("ls -1 \"$path\"${if (ignoreErrors) " 2>/dev/null" else ""}", ignoreErrors = ignoreErrors)
             .lines()
             .map { it.trim() }
             .filter { it.isNotBlank() }

@@ -59,9 +59,9 @@ class AndroidCollectCommand(
                     "trace_out",
                     "${profilerOption.format.name.lowercase()}-${LocalDateTime.now().format(
                         DateTimeFormatter.ofPattern("yyyy-MM-dd-HH-mm"),
-                    )}.trace",
+                    )}${defaultCollectOutputSuffix(profilerOption.format)}",
                 )
-        finalOutputPath.parent.toFile().mkdirs()
+        finalOutputPath.parent?.toFile()?.mkdirs()
 
         val finalPackageName =
             packageName ?: config.android?.packageName
@@ -110,3 +110,10 @@ class AndroidCollectCommand(
         )
     }
 }
+
+private fun defaultCollectOutputSuffix(format: ProfilerFormat): String =
+    when (format) {
+        ProfilerFormat.PERFETTO, ProfilerFormat.SIMPLEPERF -> ".perfetto-trace"
+        ProfilerFormat.METHOD -> ".trace"
+        ProfilerFormat.INSTRUMENTS -> error("Instruments is not an Android profiler format")
+    }

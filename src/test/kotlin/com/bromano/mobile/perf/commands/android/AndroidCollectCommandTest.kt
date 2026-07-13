@@ -69,11 +69,12 @@ class AndroidCollectCommandTest {
                 ) {
                     executed = true
                     require(testCase == fqTest)
+                    require(output == Path.of("trace.pb"))
                 }
             }
 
         val cmd = AndroidCollectCommand(shell, Config(android = AndroidConfig(packageName = pkg)), executor)
-        cmd.parse(listOf("-d", device, "-p", pkg, "-i", instr, "-t", fqTest))
+        cmd.parse(listOf("-d", device, "-p", pkg, "-i", instr, "-t", fqTest, "-o", "trace.pb"))
         assertTrue(executed)
 
         // Ensure we enumerated tests
@@ -175,6 +176,7 @@ class AndroidCollectCommandTest {
             }
 
         var viewerOverride: ProfileViewer? = null
+        var outputPath: Path? = null
         val executor =
             object : ProfilerExecutor {
                 override fun execute(
@@ -197,6 +199,7 @@ class AndroidCollectCommandTest {
                     profileViewerOverride: ProfileViewer?,
                 ) {
                     viewerOverride = profileViewerOverride
+                    outputPath = output
                 }
             }
 
@@ -204,5 +207,6 @@ class AndroidCollectCommandTest {
         cmd.parse(listOf("-d", device, "-p", pkg, "-i", instr, "-t", fqTest, "-f", "simpleperf"))
 
         assertEquals(ProfileViewer.PERFETTO, viewerOverride)
+        assertTrue(outputPath.toString().endsWith(".perfetto-trace"))
     }
 }

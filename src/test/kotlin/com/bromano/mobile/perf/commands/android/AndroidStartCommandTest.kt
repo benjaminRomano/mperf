@@ -68,7 +68,7 @@ class AndroidStartCommandTest {
                     // basic sanity
                     require(device == "device-1")
                     require(packageName == "com.example.app")
-                    require(output.toString().endsWith(".trace"))
+                    require(output.toString().endsWith(".perfetto-trace"))
                 }
 
                 override fun executeTest(
@@ -88,5 +88,44 @@ class AndroidStartCommandTest {
         val cmd = AndroidStartCommand(shell, Config(android = AndroidConfig(packageName = "com.example.app")), executor)
         cmd.parse(emptyList())
         kotlin.test.assertTrue(executed)
+    }
+
+    @Test
+    fun `simpleperf default uses gzip suffix and bare output path is accepted`() {
+        val shell = mock<Shell>()
+        var defaultOutput: Path? = null
+        var explicitOutput: Path? = null
+        val executor =
+            object : ProfilerExecutor {
+                override fun execute(
+                    profilerOptionGroup: ProfilerOptionGroup,
+                    shell: Shell,
+                    device: String,
+                    packageName: String,
+                    output: Path,
+                    profileViewerOverride: ProfileViewer?,
+                ) {
+                    if (output.toString() == "profile.json.gz") explicitOutput = output else defaultOutput = output
+                }
+
+                override fun executeTest(
+                    profilerOptionGroup: ProfilerOptionGroup,
+                    shell: Shell,
+                    device: String,
+                    packageName: String,
+                    instrumentationPackageName: String,
+                    testCase: String,
+                    output: Path,
+                    profileViewerOverride: ProfileViewer?,
+                ) = Unit
+            }
+
+        AndroidStartCommand(shell, Config(android = null), executor)
+            .parse(listOf("-d", "device-1", "-p", "com.example.app", "-f", "simpleperf"))
+        AndroidStartCommand(shell, Config(android = null), executor)
+            .parse(listOf("-d", "device-1", "-p", "com.example.app", "-f", "simpleperf", "-o", "profile.json.gz"))
+
+        kotlin.test.assertTrue(defaultOutput.toString().endsWith(".json.gz"))
+        kotlin.test.assertEquals(Path.of("profile.json.gz"), explicitOutput)
     }
 }

@@ -45,7 +45,7 @@ class IosStartCommand(
                         DateTimeFormatter.ofPattern("yyyy-MM-dd-HH-mm"),
                     )}.trace",
                 )
-        finalOutputPath.parent.toFile().mkdirs()
+        finalOutputPath.parent?.toFile()?.mkdirs()
 
         val finalBundleIdentifier =
             bundleIdentifier ?: config.ios?.bundleIdentifier
@@ -74,16 +74,10 @@ class IosStartCommand(
                     statusCode = 1,
                 )
 
-        // Verify bundle identifier exists on the selected device/simulator
-        val foundBundle =
-            try {
-                XcodeUtils(finalDevice, shell).findBundleIdentifier(finalBundleIdentifier.split(".").last())
-            } catch (_: Throwable) {
-                null
-            }
-        if (foundBundle == null) {
-            println("Warning: Could not verify bundle identifier $finalBundleIdentifier on device")
-            println("Proceeding anyway - ensure the app is installed and the bundle ID is correct")
+        // Verify the exact bundle identifier rather than guessing from the app's display name.
+        if (!XcodeUtils(finalDevice, shell).isAppInstalled(finalBundleIdentifier)) {
+            println("Warning: Could not find $finalBundleIdentifier on the selected target")
+            println("Proceeding anyway; xctrace will report an error if the app is not installed")
         }
 
         executor.execute(

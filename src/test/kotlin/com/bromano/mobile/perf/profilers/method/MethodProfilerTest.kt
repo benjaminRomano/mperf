@@ -20,8 +20,9 @@ class MethodProfilerTest {
         val adb =
             mock<Adb> {
                 on { isRunning(eq(pkg)) } doReturn true
-                // Force SDK >= 34 so implementation includes --clock-type wall (avoids double-space case)
-                on { sdkVersion } doReturn 34
+                // Wall-clock method tracing is supported starting with Android 15 (API 35).
+                on { sdkVersion } doReturn 35
+                on { shell(eq("stat -c %s \"/data/local/tmp/method.trace\""), eq(true), any()) } doReturn "128"
             }
 
         val profiler = MethodProfiler(adb, awaitStop = { /* end immediately */ })
@@ -46,6 +47,7 @@ class MethodProfilerTest {
             mock<Adb> {
                 on { isRunning(eq(pkg)) } doReturn false
                 on { resolveLaunchableActivity(eq(pkg)) } doReturn component
+                on { shell(eq("stat -c %s \"/data/local/tmp/method.trace\""), eq(true), any()) } doReturn "128"
             }
 
         val profiler = MethodProfiler(adb, awaitStop = { /* end immediately */ })
@@ -68,8 +70,9 @@ class MethodProfilerTest {
         val adb =
             mock<Adb> {
                 on { getDirUsableByAppAndShell(eq(pkg)) } doReturn mediaDir
+                on { ls(eq(mediaDir), eq(true)) } doReturn emptyList()
                 on { ls(eq(mediaDir)) } doReturn listOf(producedTrace)
-                on { shell(any(), any(), any()) } doReturn "" // instrumentation output ignored
+                on { shell(any(), any(), any()) } doReturn "INSTRUMENTATION_CODE: -1"
             }
 
         val out: Path = Files.createTempFile("method_test", ".trace")
@@ -79,9 +82,9 @@ class MethodProfilerTest {
 
         val expectedCmd =
             "am instrument -w -r -e class \"$testCase\" " +
-                "-e androidx.benchmark.profiling.mode MethodTracing " +
-                "-e androidx.benchmark.suppressErrors \"EMULATOR\" " +
-                "-e mperf.methodTrace true " +
+                "-e additionalTestOutputDir \"$mediaDir\" " +
+                "-e androidx.benchmark.profiling.mode \"MethodTracing\" " +
+                "-e androidx.benchmark.suppressErrors \"EMULATOR,METHOD-TRACING-ENABLED\" " +
                 instr
 
         verify(adb).shell(eq(expectedCmd), any(), any())

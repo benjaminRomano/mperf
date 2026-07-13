@@ -1,7 +1,6 @@
 package com.bromano.mobile.perf.gecko
 
 import com.bromano.mobile.perf.utils.Logger
-import com.bromano.mobile.perf.utils.XmlSecurityConfigurator
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
@@ -12,80 +11,44 @@ object InstrumentsConverter {
         app: String?,
         input: Path,
         runNum: Int = 1,
+        processId: Long? = null,
     ): GeckoProfile {
-        XmlSecurityConfigurator.configureXMLSecurityProperties()
-        val timeProfilerSettings = InstrumentsParser.getInstrumentsSettings(input, runNum)
-
-        // xctrace queries can be quite slow so parallelize them with coroutines
-        val conversionInputs =
+        require(runNum > 0) { "Instruments run number must be at least 1" }
+        // The table of contents and table data are independent, slow xctrace exports.
+        // Run them concurrently and export all conversion tables with one union query.
+        val (timeProfilerSettings, traceData) =
             Logger.timedLog("Loading Symbols, Samples and Load Addresses...") {
                 runBlocking {
-                    val samplesDeferred =
-                        async(Dispatchers.IO) {
-                            InstrumentsParser.loadSamples(TIME_PROFILE_SCHEMA, SAMPLE_TIME_TAG, input, runNum)
-                        }
-
-                    val loadedImageListDeferred =
-                        async(Dispatchers.IO) {
-                            InstrumentsParser.sortedImageList(input, runNum)
-                        }
-
-                    val threadIdSamplesDeferred =
-                        if (timeProfilerSettings.hasThreadStates) {
-                            async(Dispatchers.IO) { InstrumentsParser.loadIdleThreadSamples(input, runNum) }
-                        } else {
-                            null
-                        }
-
-                    val virtualMemorySamplesDeferred =
-                        if (timeProfilerSettings.hasVirtualMemory) {
-                            async(Dispatchers.IO) {
-                                InstrumentsParser.loadSamples(VIRTUAL_MEMORY_SCHEMA, START_TIME_TAG, input, runNum)
-                            }
-                        } else {
-                            null
-                        }
-
-                    val syscallSamplesDeferred =
-                        if (timeProfilerSettings.hasSyscalls) {
-                            async(Dispatchers.IO) {
-                                InstrumentsParser.loadSamples(SYSCALL_SCHEMA, START_TIME_TAG, input, runNum)
-                            }
-                        } else {
-                            null
-                        }
-
-                    ConversionInputs(
-                        samples = samplesDeferred.await(),
-                        loadedImageList = loadedImageListDeferred.await(),
-                        threadIdSamples = threadIdSamplesDeferred?.await(),
-                        virtualMemorySamples = virtualMemorySamplesDeferred?.await(),
-                        syscallSamples = syscallSamplesDeferred?.await(),
-                    )
+                    val settingsDeferred =
+                        async(Dispatchers.IO) { InstrumentsParser.getInstrumentsSettings(input, runNum) }
+                    val traceDataDeferred = async(Dispatchers.IO) { InstrumentsParser.loadTraceData(input, runNum) }
+                    settingsDeferred.await() to traceDataDeferred.await()
                 }
             }
 
         val concatenatedSamples =
-            (conversionInputs.syscallSamples ?: emptyList()) +
-                (conversionInputs.threadIdSamples ?: emptyList()) +
-                (conversionInputs.virtualMemorySamples ?: emptyList()) +
-                conversionInputs.samples
+            traceData.syscallSamples +
+                traceData.threadIdSamples +
+                traceData.virtualMemorySamples +
+                traceData.samples
+        val selectedSamples =
+            processId?.let { selectedPid -> concatenatedSamples.filter { it.thread.pid.toLong() == selectedPid } }
+                ?: concatenatedSamples
+        require(selectedSamples.isNotEmpty()) {
+            processId?.let { "Instruments trace does not contain samples for process $it" }
+                ?: "Instruments trace does not contain samples"
+        }
+        val selectedLibraries =
+            processId?.let { selectedPid -> traceData.loadedImageList.filter { it.pid.toLong() == selectedPid } }
+                ?: traceData.loadedImageList
 
         return Logger.timedLog("Converting to Gecko format") {
             GeckoGenerator.createGeckoProfile(
                 app,
-                concatenatedSamples,
-                conversionInputs.loadedImageList,
+                selectedSamples,
+                selectedLibraries,
                 timeProfilerSettings,
             )
         }
     }
-
-    private data class ConversionInputs(
-        val samples: List<InstrumentsSample>,
-        val loadedImageList: List<Library>,
-        val threadIdSamples: List<InstrumentsSample>?,
-        val virtualMemorySamples: List<InstrumentsSample>?,
-        val syscallSamples: List<InstrumentsSample>?,
-    )
 }

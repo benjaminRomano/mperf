@@ -8,7 +8,9 @@ import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
 import org.mockito.kotlin.doAnswer
 import org.mockito.kotlin.doNothing
+import org.mockito.kotlin.isNull
 import org.mockito.kotlin.mock
+import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import java.nio.file.Files
@@ -37,7 +39,7 @@ class InstrumentsProfilerTest {
             Files.createDirectories(outputPath.parent)
             Files.createFile(outputPath)
             null
-        }.whenever(mockXcodeUtils).record(any<String>(), any<List<String>>(), any<String>(), any<String>())
+        }.whenever(mockXcodeUtils).record(any<String>(), any<List<String>>(), any<String>(), any<String>(), isNull())
 
         val profiler = InstrumentsProfiler(mockXcodeUtils, options)
 
@@ -48,6 +50,7 @@ class InstrumentsProfilerTest {
             options.instruments,
             "com.example.app",
             output.toString(),
+            null,
         )
         assertTrue(output.exists(), "Trace file should be present after recording")
     }
@@ -63,7 +66,7 @@ class InstrumentsProfilerTest {
             assertTrue(outputPath.notExists(), "Existing output should be deleted before recording starts")
             Files.createFile(outputPath)
             null
-        }.whenever(mockXcodeUtils).record(any<String>(), any<List<String>>(), any<String>(), any<String>())
+        }.whenever(mockXcodeUtils).record(any<String>(), any<List<String>>(), any<String>(), any<String>(), isNull())
 
         val profiler = InstrumentsProfiler(mockXcodeUtils, InstrumentsProfilerOptions())
 
@@ -77,7 +80,7 @@ class InstrumentsProfilerTest {
         val tempDir: Path = createTempDirectory("instruments-profiler-failure")
         val output = tempDir.resolve("trace.trace")
 
-        doNothing().whenever(mockXcodeUtils).record(any<String>(), any<List<String>>(), any<String>(), any<String>())
+        doNothing().whenever(mockXcodeUtils).record(any<String>(), any<List<String>>(), any<String>(), any<String>(), isNull())
 
         val profiler = InstrumentsProfiler(mockXcodeUtils, InstrumentsProfilerOptions())
 
@@ -87,5 +90,147 @@ class InstrumentsProfilerTest {
             }
 
         assertTrue(error.message!!.contains("Trace file was not created"))
+    }
+
+    @Test
+    fun `execute retries an xctrace finalization crash once and removes partial output`() {
+        val tempDir: Path = createTempDirectory("instruments-profiler-retry")
+        val output = tempDir.resolve("trace.trace")
+        var attempts = 0
+
+        doAnswer { invocation ->
+            val outputPath = Path.of(invocation.getArgument<String>(3))
+            attempts++
+            if (attempts == 1) {
+                Files.createDirectories(outputPath)
+                Files.createFile(outputPath.resolve("partial"))
+                throw IllegalStateException("xctrace exited with code 139")
+            }
+
+            assertTrue(outputPath.notExists(), "Partial trace should be removed before retrying")
+            Files.createDirectories(outputPath)
+            Files.createFile(outputPath.resolve("completed"))
+            null
+        }.whenever(mockXcodeUtils).record(any<String>(), any<List<String>>(), any<String>(), any<String>(), isNull())
+
+        InstrumentsProfiler(mockXcodeUtils, InstrumentsProfilerOptions()).execute("com.example.app", output)
+
+        verify(mockXcodeUtils, times(2)).record(any<String>(), any<List<String>>(), any<String>(), any<String>(), isNull())
+        assertTrue(output.resolve("completed").exists())
+    }
+
+    @Test
+    fun `execute retries exit code one when xctrace leaves partial output`() {
+        val output = createTempDirectory("instruments-profiler-exit-one-retry").resolve("trace.trace")
+        var attempts = 0
+
+        doAnswer { invocation ->
+            val outputPath = Path.of(invocation.getArgument<String>(3))
+            attempts++
+            if (attempts == 1) {
+                Files.createDirectories(outputPath)
+                Files.createFile(outputPath.resolve("partial"))
+                throw IllegalStateException("xctrace exited with code 1")
+            }
+
+            assertTrue(outputPath.notExists(), "Partial trace should be removed before retrying")
+            Files.createDirectories(outputPath)
+            null
+        }.whenever(mockXcodeUtils).record(any<String>(), any<List<String>>(), any<String>(), any<String>(), isNull())
+
+        InstrumentsProfiler(mockXcodeUtils, InstrumentsProfilerOptions()).execute("com.example.app", output)
+
+        verify(mockXcodeUtils, times(2)).record(any<String>(), any<List<String>>(), any<String>(), any<String>(), isNull())
+    }
+
+    @Test
+    fun `execute retries a collection timeout when xctrace leaves partial output`() {
+        val output = createTempDirectory("instruments-profiler-timeout-retry").resolve("trace.trace")
+        var attempts = 0
+
+        doAnswer { invocation ->
+            val outputPath = Path.of(invocation.getArgument<String>(3))
+            attempts++
+            if (attempts == 1) {
+                Files.createDirectories(outputPath)
+                Files.createFile(outputPath.resolve("partial"))
+                throw IllegalStateException(
+                    "xctrace did not stop before the collection timeout; the trace may be unusable",
+                )
+            }
+
+            assertTrue(outputPath.notExists(), "Timed-out trace should be removed before retrying")
+            Files.createDirectories(outputPath)
+            null
+        }.whenever(mockXcodeUtils).record(any<String>(), any<List<String>>(), any<String>(), any<String>(), isNull())
+
+        InstrumentsProfiler(mockXcodeUtils, InstrumentsProfilerOptions()).execute("com.example.app", output)
+
+        verify(mockXcodeUtils, times(2)).record(any<String>(), any<List<String>>(), any<String>(), any<String>(), isNull())
+    }
+
+    @Test
+    fun `execute retries sigpipe when xctrace leaves partial output`() {
+        val output = createTempDirectory("instruments-profiler-sigpipe-retry").resolve("trace.trace")
+        var attempts = 0
+
+        doAnswer { invocation ->
+            val outputPath = Path.of(invocation.getArgument<String>(3))
+            attempts++
+            if (attempts == 1) {
+                Files.createDirectories(outputPath)
+                Files.createFile(outputPath.resolve("partial"))
+                throw IllegalStateException("xctrace exited with code 141")
+            }
+
+            assertTrue(outputPath.notExists(), "SIGPIPE trace should be removed before retrying")
+            Files.createDirectories(outputPath)
+            null
+        }.whenever(mockXcodeUtils).record(any<String>(), any<List<String>>(), any<String>(), any<String>(), isNull())
+
+        InstrumentsProfiler(mockXcodeUtils, InstrumentsProfilerOptions()).execute("com.example.app", output)
+
+        verify(mockXcodeUtils, times(2)).record(any<String>(), any<List<String>>(), any<String>(), any<String>(), isNull())
+    }
+
+    @Test
+    fun `execute does not retry xctrace failures without partial output`() {
+        val output = createTempDirectory("instruments-profiler-no-retry").resolve("trace.trace")
+        whenever(mockXcodeUtils.record(any<String>(), any<List<String>>(), any<String>(), any<String>(), isNull()))
+            .thenThrow(IllegalStateException("xctrace exited with code 1"))
+
+        val error =
+            assertThrows(IllegalStateException::class.java) {
+                InstrumentsProfiler(mockXcodeUtils, InstrumentsProfilerOptions()).execute("com.example.app", output)
+            }
+
+        assertTrue(error.message!!.contains("code 1"))
+        verify(mockXcodeUtils).record(any<String>(), any<List<String>>(), any<String>(), any<String>(), isNull())
+    }
+
+    @Test
+    fun `execute does not retry when a timed-out xctrace cannot be reaped`() {
+        val output = createTempDirectory("instruments-profiler-unreaped").resolve("trace.trace")
+        doAnswer { invocation ->
+            Files.createDirectories(Path.of(invocation.getArgument<String>(3)))
+            throw IllegalStateException("xctrace could not be terminated after the collection timeout")
+        }.whenever(mockXcodeUtils).record(any<String>(), any<List<String>>(), any<String>(), any<String>(), isNull())
+
+        val error =
+            assertThrows(IllegalStateException::class.java) {
+                InstrumentsProfiler(mockXcodeUtils, InstrumentsProfilerOptions()).execute("com.example.app", output)
+            }
+
+        assertTrue(error.message!!.contains("could not be terminated"))
+        verify(mockXcodeUtils).record(any<String>(), any<List<String>>(), any<String>(), any<String>(), isNull())
+    }
+
+    @Test
+    fun `executeTest fails explicitly because Android instrumentation is unsupported`() {
+        val profiler = InstrumentsProfiler(mockXcodeUtils, InstrumentsProfilerOptions())
+
+        assertThrows(UnsupportedOperationException::class.java) {
+            profiler.executeTest("com.example.app", "runner", "test", Path.of("trace.trace"))
+        }
     }
 }

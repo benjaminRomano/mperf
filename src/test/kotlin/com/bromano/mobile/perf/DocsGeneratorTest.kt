@@ -4,6 +4,7 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import kotlin.io.path.createTempDirectory
+import kotlin.io.path.notExists
 import kotlin.test.assertContains
 import kotlin.test.assertTrue
 
@@ -36,6 +37,20 @@ class DocsGeneratorTest {
         assertContains(md, "| ios |  |")
         assertContains(md, "| android |  |")
     }
+
+    @Test
+    fun `generation does not create user config`() {
+        val configPath = getConfigPathWithoutCreating()
+
+        DocsGenerator.generateCliDocsMarkdown()
+
+        assertTrue(configPath.notExists())
+    }
+
+    private fun getConfigPathWithoutCreating() =
+        java.nio.file.Paths
+            .get(System.getProperty("user.home"))
+            .resolve(".mperf/config.yml")
 
     @Test
     fun `start command options include expected rows`() {

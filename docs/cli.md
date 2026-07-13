@@ -34,6 +34,7 @@
 | --format, -f | (instruments) | Profiler to use for collection |
 | --template | text | Instruments template to use for profiling |
 | --instrument | text | Instruments to include |
+| --time-limit | text | Stop automatically after a duration such as 30s or 2m |
 | --out, -o | path | Output path for trace |
 | --bundle, -b | text | Bundle identifier (e.g. com.example.app) |
 | --device, -d | text | Device/Simulator UDID |

@@ -71,13 +71,15 @@ open class FakeShell : Shell {
             ?: ProcessBuilder(listOf("bash", "-lc", "true"))
     }
 
-    override fun waitFor(process: Process) { /* no-op */ }
+    override fun waitFor(process: Process) {
+        process.waitFor()
+    }
 
     override fun waitFor(
         process: Process,
         timeout: Long,
         unit: TimeUnit,
-    ): Boolean = true
+    ): Boolean = process.waitFor(timeout, unit)
 
     class FakeProcess(
         private val inputContent: String = "",

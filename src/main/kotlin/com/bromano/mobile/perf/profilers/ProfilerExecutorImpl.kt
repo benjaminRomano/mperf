@@ -54,7 +54,13 @@ class ProfilerExecutorImpl(
 
         collector.execute(packageName, output)
 
-        profileOpener.openProfile(packageName, output, profilerOptionGroup.format, profileViewerOverride)
+        profileOpener.openProfile(
+            packageName,
+            output,
+            profilerOptionGroup.format,
+            profileViewerOverride,
+            collector.targetProcessId,
+        )
     }
 
     override fun executeTest(

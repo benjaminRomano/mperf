@@ -189,6 +189,27 @@ class IosStartCommandTest {
     }
 
     @Test
+    fun `command accepts a bare relative output filename`() {
+        val result =
+            command.test(
+                "--bundle com.example.app --device 12345678-1234-1234-1234-123456789012 --out trace.trace",
+            )
+
+        assertEquals(0, result.statusCode)
+        verify(mockExecutor).execute(
+            any(),
+            eq(shell),
+            eq("12345678-1234-1234-1234-123456789012"),
+            eq("com.example.app"),
+            eq(
+                java.nio.file.Paths
+                    .get("trace.trace"),
+            ),
+            eq(null),
+        )
+    }
+
+    @Test
     fun `command passes profile viewer override to executor`() {
         shell.selectChoiceResult = "Simulator: iPhone 15 (12345678-1234-1234-1234-123456789012) [Booted]"
 

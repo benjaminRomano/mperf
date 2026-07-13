@@ -64,6 +64,7 @@ class ProfilerExecutorTest {
                     trace: Path,
                     format: ProfilerFormat,
                     profileViewerOverride: ProfileViewer?,
+                    targetProcessId: Long?,
                 ) {
                     opened = true
                     capturedViewer = profileViewerOverride

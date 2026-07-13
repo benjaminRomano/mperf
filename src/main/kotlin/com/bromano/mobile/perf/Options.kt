@@ -49,6 +49,8 @@ class InstrumentsOptions : ProfilerOptionGroup(ProfilerFormat.INSTRUMENTS) {
 
     val instruments by option("--instrument", help = "Instruments to include")
         .multiple()
+
+    val timeLimit by option("--time-limit", help = "Stop automatically after a duration such as 30s or 2m")
 }
 
 fun ParameterHolder.profilerOptions(

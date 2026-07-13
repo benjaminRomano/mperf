@@ -28,7 +28,7 @@ platform profilers and supports collection over both ad-hoc app sessions and sin
 - Java 21+
 - Android SDK Platform‑Tools (`adb` on PATH)
 - `python3`, `tar`, and `gzip` on PATH
-- Xcode Command Line Tools (for iOS Instruments collection)
+- Full Xcode installation with an active developer directory (for `xctrace`, Instruments, and Simulator)
 - macOS or Linux
 
 ## Install
@@ -117,17 +117,14 @@ aperf collect -p com.example.app -t SomeBenchmark#case
 # Defaults to using `-e cpu-clock -f 4000 -g` with noisy frames removed (extraneous RxJava frames, kotlinx coroutines, DEDUPED frames and ART frames)
 aperf start -f simpleperf -p com.example.app
 
-# Advanced: custom simpleperf args, symbolization, and filtering
+# Advanced: off-CPU tracing with 4 kHz sampling, native symbols, R8 mappings, and custom filters.
+# Paths are quoted so the command remains safe when a directory contains spaces.
 aperf start -f simpleperf -p com.example.app \
-  # Off-CPU tracing with sampling every 4KHz (.25ms)
-  --simpleperfArgs "e task-clock -g -f 4000 --trace-offcpu" \
-  # Provide directory of symbols for symbolicating native frames
-  --symfs $HOME/Android/Symbols \
-  # Provide mappings for deobfuscating java frames
+  --simpleperfArgs "-e task-clock -g -f 4000 --trace-offcpu" \
+  --symfs "$HOME/Android/Symbols" \
   --mapping app/build/outputs/mapping/release/mapping.txt \
-  # Filter noisy RxJava frames and DEDUPED frames
-  -- remove-method "^io\.reactivex.*$" --remove-method "^\[DEDUPED\].*$" \
-  # Hide Android Runtime Frames
+  --remove-method "^io\.reactivex.*$" \
+  --remove-method "^\[DEDUPED\].*$" \
   --no-show-art-frames
 
 # View sampling profiler data in Perfetto instead
@@ -146,9 +143,8 @@ aperf start -f method -p com.example.app
 # Use Perfetto instead to view ART Method Trace
 aperf start -p com.example.app -f method --ui perfetto
 
-# NOTE: Due to Macrobenchmark limitations, the number of iterations specified in `measureRepeat(...)` will be performed before the method trace is collected.
-# To mitigate this, adjust the iteration count when `InstrumentRegistry.getArguments().getString("mperf.methodTrace")?.trim()?.toBooleanStrictOrNull() == "true"`
-# so the method trace completes faster.
+# Macrobenchmark runs its configured measurement iterations first, then captures one additional
+# profiling iteration with method tracing enabled.
 aperf collect -p com.example.app -f method -t SomeBenchmark#case
 ```
 
@@ -164,6 +160,17 @@ iperf start -b com.example.app --instrument "Time Profiler" --instrument "Core A
 
 Instrument traces can be reviewed directly in Instruments, or converted for analysis in Firefox Profiler or Perfetto via the `--ui` flag.
 
+Only booted simulators are offered by the interactive device picker. Boot a simulator first with Xcode or
+`xcrun simctl boot <UDID>`. If multiple Xcode installations are present, select the intended one with
+`sudo xcode-select --switch /Applications/Xcode.app`; Apple ships `xctrace` with the full Xcode app, not the
+standalone Command Line Tools package.
+
+Recent Xcode releases do not reliably accept a simulator process as an `xctrace` target. For simulator collection,
+`mperf` therefore launches or finds the requested app, records host processes as a compatibility fallback, and emits
+a warning. Converted Firefox Profiler and Perfetto output is filtered to the selected app PID; the raw `.trace` still
+contains other host processes, can be substantially larger, and should be treated as host-wide diagnostic data.
+Physical-device collection remains target-scoped.
+
 To convert a saved Instruments trace into a Gecko profile for Firefox Profiler:
 
 ```bash
@@ -171,6 +178,17 @@ iperf convert --input MyTrace.trace --output my-trace.gecko.json --app MyApp
 ```
 
 See the [CLI reference](docs/cli.md) for additional options, such as targeting a specific run or choosing a viewer.
+
+The simulator integration test builds and installs its own minimal fixture app, exercises both launch and attach
+collection, validates the trace table of contents, and converts the Time Profiler trace:
+
+```bash
+./gradlew test -Dmperf.integration.ios.enabled=true \
+  --tests com.bromano.mobile.perf.integration.IosProfilerIntegrationTest
+```
+
+Pass `-Dmperf.integration.ios.device=<SIMULATOR_UDID>` to select a particular available simulator. The test restores
+the simulator's original boot state and removes its fixture app when it finishes.
 
 ## Configuration
 
@@ -226,22 +244,32 @@ To make uploaded traces open directly in Perfetto UI, configure `perfettoUrl` wi
 - Lint: `./gradlew ktlintCheck` / `./gradlew ktlintFormat`
 - Run: `./gradlew run --args "android start -p com.example.app"`
 - Generate CLI docs: `./gradlew generateDocs` → `docs/cli.md`
+- Compile performance benchmarks: `./gradlew jmhClasses`
+- Benchmark Instruments-to-Gecko conversion (macOS with Xcode): `./gradlew jmh`
 - Contributor workflow and coding conventions: see [`AGENTS.md`](AGENTS.md).
+
+The Instruments benchmark uses the checked-in saved trace and reports average conversion time. On the same machine,
+JDK, Xcode, trace, and JMH configuration, consolidating table exports and overlapping the table-of-contents query reduced
+the measured average from 3,912.775 ms/op to 2,005.120 ms/op (48.8%). Treat local results as comparative measurements;
+`xctrace`, Xcode, host load, and hardware materially affect absolute timings.
 
 ## Releasing
 
-- Releases are created by pushing a Git tag matching `v*` (e.g., `v1.2.3`).
-- The GitHub Actions workflow builds, tests, and sets the Gradle project version to the tag value (without the leading `v`).
+- Releases are created by pushing a SemVer Git tag such as `v1.2.3` or `v1.2.3-rc.1`.
+- Use the repository's `$release-mperf` skill in [`.codex/skills/release-mperf`](.codex/skills/release-mperf/SKILL.md) to run the preflight, publish the tag, and verify the result.
+- The GitHub Actions workflow validates the wrapper and tag, builds, tests, lints, verifies generated docs and the packaged CLI, and sets the Gradle project version from the tag.
 - Assets uploaded to the GitHub Release:
   - `mperf-<version>-all.jar` (fat JAR with `Implementation-Version` in the manifest)
   - `mperf-<version>-all.jar.sha256`
+- GitHub artifact provenance is attested for each release JAR. Versions containing a prerelease suffix are published as prereleases.
 
-Trigger a release from your terminal:
+Run the local preflight directly when needed:
 
+```bash
+.codex/skills/release-mperf/scripts/preflight.sh 1.2.3
 ```
-git tag v1.2.3
-git push origin v1.2.3
-```
+
+Publishing requires `gh` authentication with tag-push access. The workflow uses only the repository-provided `GITHUB_TOKEN`; repository or organization policy must allow `contents`, `id-token`, and `attestations` write permissions.
 
 Find published releases and download artifacts at:
 

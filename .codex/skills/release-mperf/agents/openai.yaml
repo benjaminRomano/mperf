@@ -1,0 +1,4 @@
+interface:
+  display_name: "mperf Release"
+  short_description: "Validate and publish a safe mperf release"
+  default_prompt: "Use $release-mperf to prepare and publish the next mperf release."

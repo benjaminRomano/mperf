@@ -2,6 +2,9 @@ package com.bromano.mobile.perf.profilers.perfetto
 
 import com.bromano.mobile.perf.PerfettoOptions
 import com.bromano.mobile.perf.profilers.Profiler
+import com.bromano.mobile.perf.profilers.buildBenchmarkInstrumentationCommand
+import com.bromano.mobile.perf.profilers.findNewBenchmarkOutput
+import com.bromano.mobile.perf.profilers.validateBenchmarkInstrumentationOutput
 import com.bromano.mobile.perf.utils.Adb
 import com.bromano.mobile.perf.utils.Logger
 import com.bromano.mobile.perf.utils.Shell
@@ -12,7 +15,7 @@ import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 
 private const val TRACEBOX_PATH = "/data/local/tmp/tracebox"
-private const val PERFETTO_TRACEBOX_VERSION = "v54.0"
+private const val PERFETTO_TRACEBOX_VERSION = "v57.2"
 
 private data class TraceboxArtifact(
     val url: String,
@@ -23,6 +26,7 @@ class PerfettoProfiler(
     val shell: Shell,
     val adb: Adb,
     val perfettoOptions: PerfettoOptions,
+    private val startupTimeoutMs: Long = TimeUnit.SECONDS.toMillis(10),
     private val awaitStop: () -> Unit = { readlnOrNull() },
 ) : Profiler {
     override fun execute(
@@ -62,17 +66,11 @@ class PerfettoProfiler(
 
         val perfettoCommand = "adb ${adb.deviceOpts} shell 'cat /data/local/tmp/perfetto_config.pb | $perfettoBinary -c - -o $fileOnDevice'"
         val perfettoProc = shell.startProcess(perfettoCommand)
+        val processName = perfettoBinary.substringAfterLast("/")
+        val pid = waitForPerfettoStart(processName)
 
-        // TODO: An alternative methodology to communicate with perfetto process should be explored.
-        // We attempt to print out the press any key statement after the Perfetto output
-        Thread.sleep(1000)
         Logger.info("Press any key to end tracing...")
         awaitStop()
-
-        val processName = perfettoBinary.split("/").last()
-        val pid =
-            adb.pidof(processName)
-                ?: throw PrintMessage("Running Perfetto process was not found.", printError = true)
 
         // Some device support `kill` and others `killall`
         try {
@@ -92,6 +90,15 @@ class PerfettoProfiler(
         adb.shell("cat $fileOnDevice > $output")
     }
 
+    private fun waitForPerfettoStart(processName: String): String {
+        val deadline = System.currentTimeMillis() + startupTimeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            adb.pidof(processName)?.let { return it }
+            Thread.sleep(100L)
+        }
+        throw PrintMessage("Perfetto did not start within ${startupTimeoutMs}ms.", printError = true)
+    }
+
     override fun executeTest(
         packageName: String,
         instrumentationRunner: String,
@@ -100,27 +107,38 @@ class PerfettoProfiler(
     ) {
         Logger.info("Running performance test: $testCase")
 
-        adb.shell(
-            buildString {
-                append("am instrument -w -r ")
-                append("-e class \"$testCase\" ")
-                // Only perform a single iteration
-                append("-e androidx.benchmark.dryRunMode.enable true ")
-                // Always allow emulators. This won't produce useful performance data but can be heplful for
-                // debugging
-                append("-e androidx.benchmark.suppressErrors \"EMULATOR\" ")
-                append(instrumentationRunner)
-            },
-        )
+        val outputDir = adb.getDirUsableByAppAndShell(instrumentationRunner.substringBefore("/"))
+        val filesBeforeRun = adb.ls(outputDir, ignoreErrors = true).toSet()
+        val instrumentationOutput =
+            adb.shell(
+                buildBenchmarkInstrumentationCommand(
+                    instrumentationRunner = instrumentationRunner,
+                    testCase = testCase,
+                    outputDirectory = outputDir,
+                    arguments =
+                        linkedMapOf(
+                            // Macrobenchmark uses dry-run mode to run one measurement iteration.
+                            "androidx.benchmark.dryRunMode.enable" to "true",
+                            // Emulator traces validate collection, but aren't useful for performance comparisons.
+                            "androidx.benchmark.suppressErrors" to "EMULATOR",
+                        ),
+                ),
+            )
+        validateBenchmarkInstrumentationOutput(instrumentationOutput)
 
         Logger.info("Test complete. Pulling trace...")
 
-        val outputDir = adb.getDirUsableByAppAndShell(instrumentationRunner.substringBefore("/"))
         val trace =
-            adb.ls(outputDir).firstOrNull { it.endsWith(".perfetto-trace") }
+            findNewBenchmarkOutput(
+                instrumentationOutput = instrumentationOutput,
+                filesBeforeRun = filesBeforeRun,
+                filesAfterRun = adb.ls(outputDir),
+                outputDirectory = outputDir,
+                matches = { it.endsWith(".perfetto-trace") },
+            )
                 ?: throw PrintMessage("No perfetto trace found by instrumentation test in $outputDir", printError = true)
 
-        adb.pull("$outputDir$trace", output.toString())
+        adb.pull(trace, output.toString())
     }
 }
 
@@ -128,33 +146,34 @@ class PerfettoProfiler(
  * Sideload Perfetto binary onto device
  */
 private fun sideloadPerfetto(adb: Adb) {
-    // TODO: Check if up-to-date in the future
-    if (adb.ls("/data/local/tmp/").contains("tracebox")) {
-        return
-    }
-
-    Logger.info("Sideloading Perfetto $PERFETTO_TRACEBOX_VERSION onto device")
-
     val binaryArtifacts =
         mapOf(
             "arm64-v8a" to
                 TraceboxArtifact(
                     "https://commondatastorage.googleapis.com/perfetto-luci-artifacts/$PERFETTO_TRACEBOX_VERSION/android-arm64/tracebox",
-                    "a7c6a7df683ba098aef3d747ead69d25e937aaf3241d47d2d87f1d2826588768",
+                    "1f3fdf7c23134eb6ef7393ea914b3ea8c0acb74c46230282366b3cb4502b6b7c",
                 ),
             "armeabi-v7a" to
                 TraceboxArtifact(
                     "https://commondatastorage.googleapis.com/perfetto-luci-artifacts/$PERFETTO_TRACEBOX_VERSION/android-arm/tracebox",
-                    "41827319c6d258c264042d10b7f2584135fc65cc31fe60bc2413a45a0e8d6e42",
+                    "d53456f9c857c58e2410eeda3710aac7596059d5c9f509d66f962f41280b7f3a",
                 ),
             "x86_64" to
                 TraceboxArtifact(
                     "https://commondatastorage.googleapis.com/perfetto-luci-artifacts/$PERFETTO_TRACEBOX_VERSION/android-x64/tracebox",
-                    "193f686e290a6f4d53c7a06cea487f3c9ac5f8990d036a79713d6a088482ead8",
+                    "eace8af8734d420d6e8245f968bfb41ed334364d29bc8ac3be15dc1206714239",
                 ),
         )
 
     val artifact = binaryArtifacts[adb.abi] ?: throw PrintMessage("Unexpected ABI: ${adb.abi}", printError = true)
+    if (adb.ls("/data/local/tmp/").contains("tracebox") &&
+        adb.shell("sha256sum $TRACEBOX_PATH", ignoreErrors = true).substringBefore(" ").trim() == artifact.sha256
+    ) {
+        return
+    }
+
+    Logger.info("Sideloading Perfetto $PERFETTO_TRACEBOX_VERSION onto device")
+
     val traceboxPath = Files.createTempFile("tracebox", "")
     downloadVerified(artifact.url, traceboxPath, artifact.sha256)
     adb.push(traceboxPath.toString(), TRACEBOX_PATH)

@@ -101,8 +101,9 @@ class PerfettoProfilerTest {
         val adb =
             mock<Adb> {
                 on { getDirUsableByAppAndShell(eq(pkg)) } doReturn mediaDir
+                on { ls(eq(mediaDir), eq(true)) } doReturn emptyList()
                 on { ls(eq(mediaDir)) } doReturn listOf(producedTrace)
-                on { shell(any(), any(), any()) } doReturn "" // instrumentation output ignored here
+                on { shell(any(), any(), any()) } doReturn "INSTRUMENTATION_CODE: -1"
             }
 
         val shell = FakeShell()
@@ -113,11 +114,13 @@ class PerfettoProfilerTest {
 
         val expectedCmd =
             "am instrument -w -r -e class \"$testCase\" " +
-                "-e androidx.benchmark.dryRunMode.enable true " +
+                "-e additionalTestOutputDir \"$mediaDir\" " +
+                "-e androidx.benchmark.dryRunMode.enable \"true\" " +
                 "-e androidx.benchmark.suppressErrors \"EMULATOR\" " +
                 instr
 
         verify(adb).shell(eq(expectedCmd), any(), any())
+        verify(adb).ls(eq(mediaDir), eq(true))
         verify(adb).ls(eq(mediaDir))
         verify(adb).pull(eq(mediaDir + producedTrace), eq(out.toString()))
     }
@@ -132,8 +135,9 @@ class PerfettoProfilerTest {
         val adb =
             mock<Adb> {
                 on { getDirUsableByAppAndShell(eq(pkg)) } doReturn mediaDir
+                on { ls(eq(mediaDir), eq(true)) } doReturn emptyList()
                 on { ls(eq(mediaDir)) } doReturn emptyList()
-                on { shell(any(), any(), any()) } doReturn ""
+                on { shell(any(), any(), any()) } doReturn "INSTRUMENTATION_CODE: -1"
             }
 
         val shell = FakeShell()
