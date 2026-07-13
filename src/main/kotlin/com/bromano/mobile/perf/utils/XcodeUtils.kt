@@ -301,6 +301,7 @@ class XcodeUtils(
 
         if (!stopped) {
             process.destroyForcibly()
+            shell.waitFor(process, 10, TimeUnit.SECONDS)
             throw IllegalStateException("xctrace did not stop before the collection timeout; the trace may be unusable")
         }
         if (process.exitValue() != 0) {

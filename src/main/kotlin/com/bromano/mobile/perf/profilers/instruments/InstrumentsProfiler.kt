@@ -93,6 +93,7 @@ class InstrumentsProfiler(
             setOf(
                 "xctrace exited with code 1",
                 "xctrace exited with code 139",
+                "xctrace did not stop before the collection timeout; the trace may be unusable",
             )
     }
 }
