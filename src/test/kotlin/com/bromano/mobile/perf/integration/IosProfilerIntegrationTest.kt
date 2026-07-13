@@ -54,29 +54,31 @@ class IosProfilerIntegrationTest {
 
             shell.runCommand("xcrun simctl terminate ${quote(deviceId)} ${quote(bundleIdentifier)}", ignoreErrors = true)
             val launchTrace = workspace.resolve("launch.trace")
-            val profilerOptions =
-                InstrumentsProfilerOptions(
-                    instruments = listOf("Points of Interest"),
-                    timeLimit = "5s",
-                )
-            InstrumentsProfiler(xcodeUtils, profilerOptions)
+            val timeProfilerOptions = InstrumentsProfilerOptions(timeLimit = "2s")
+            InstrumentsProfiler(xcodeUtils, timeProfilerOptions)
                 .execute(bundleIdentifier, launchTrace)
-            assertTraceCreated(launchTrace)
-            assertSignpostSchemaCreated(launchTrace)
+            assertTraceCreated(launchTrace, "time-profile")
+            val launchProcessId = requireNotNull(xcodeUtils.lastRecordedProcessId)
 
             xcodeUtils.launchApp(bundleIdentifier)
             Thread.sleep(1_000)
             assertTrue(xcodeUtils.isAppRunning(bundleIdentifier))
             val attachTrace = workspace.resolve("attach.trace")
-            InstrumentsProfiler(xcodeUtils, profilerOptions)
+            val signpostOptions =
+                InstrumentsProfilerOptions(
+                    template = "Logging",
+                    instruments = listOf("Points of Interest"),
+                    timeLimit = "2s",
+                )
+            InstrumentsProfiler(xcodeUtils, signpostOptions)
                 .execute(bundleIdentifier, attachTrace)
-            assertTraceCreated(attachTrace)
+            assertTraceCreated(attachTrace, "os-signpost")
 
             val profile =
                 InstrumentsConverter.convert(
                     "MperfFixture",
                     launchTrace,
-                    processId = requireNotNull(xcodeUtils.lastRecordedProcessId),
+                    processId = launchProcessId,
                 )
             assertTrue(profile.threads.isNotEmpty(), "converted Gecko profile should contain sampled threads")
             assertTrue(
@@ -141,7 +143,10 @@ class IosProfilerIntegrationTest {
             .runCommand("xcrun simctl list devices ${quote(deviceId)} --json")
             .contains("\"state\" : \"Booted\"")
 
-    private fun assertTraceCreated(path: Path) {
+    private fun assertTraceCreated(
+        path: Path,
+        requiredSchema: String,
+    ) {
         assertTrue(path.exists() && path.isDirectory(), "expected Instruments trace directory at $path")
         assertTrue(path.listDirectoryEntries().isNotEmpty(), "expected non-empty Instruments trace at $path")
         val toc =
@@ -150,17 +155,7 @@ class IosProfilerIntegrationTest {
                 redirectOutput = ProcessBuilder.Redirect.PIPE,
                 redirectError = ProcessBuilder.Redirect.PIPE,
             )
-        assertTrue(toc.contains("time-profile"), "trace table of contents should include Time Profiler data")
-    }
-
-    private fun assertSignpostSchemaCreated(path: Path) {
-        val toc =
-            shell.runCommand(
-                "xcrun xctrace export --input ${quote(path.toString())} --toc",
-                redirectOutput = ProcessBuilder.Redirect.PIPE,
-                redirectError = ProcessBuilder.Redirect.PIPE,
-            )
-        assertTrue(toc.contains("schema=\"os-signpost\""), "trace should include the os-signpost schema")
+        assertTrue(toc.contains("schema=\"$requiredSchema\""), "trace should include the $requiredSchema schema")
     }
 
     private fun quote(value: String): String = "'" + value.replace("'", "'\"'\"'") + "'"

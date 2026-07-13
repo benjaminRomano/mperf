@@ -44,6 +44,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Fixed the Android emulator action passing shell line-continuation characters to Gradle as a literal task instead of starting the end-to-end profiling suite.
 - Fixed cold iOS Simulator integration runs timing out while Xcode finalized host-wide traces on macOS 26; the test now allows bounded first-boot and trace-finalization overhead beneath the workflow-level timeout.
 - Fixed transient Xcode 26 `xctrace` finalization failures leaving partial Instruments outputs and failing simulator collection; exit codes 1 and 139 now trigger one clean retry only when collection created a partial trace, while preflight and argument errors still fail immediately.
+- Fixed Xcode 26 instability while finalizing host-wide, multi-instrument Simulator traces by keeping the live Time Profiler launch capture focused on samples and validating Points of Interest in a separate Logging attach capture; both traces use short deterministic windows while preserving Gecko conversion and signpost coverage.
 - Fixed Macrobenchmark failures being treated as successful collections and stale output files being selected when a run did not produce a new trace.
 - Fixed ART method tracing using the wall-clock flag before its supported API level and pulling traces before Android finished writing them.
 - Fixed Perfetto and Simpleperf sessions failing nondeterministically when profiler process startup took longer than a fixed delay.
