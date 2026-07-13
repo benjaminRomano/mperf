@@ -259,7 +259,8 @@ class XcodeUtils(
                         Logger.warning(
                             "Warning: recent Xcode versions cannot target a simulator process reliably; " +
                                 "recording uses a host-wide fallback. The converted profile is filtered to PID " +
-                                "$simulatorProcessId, but the raw Instruments trace contains other host processes.",
+                                "$simulatorProcessId, but the raw Instruments trace contains other host processes " +
+                                "and unified-log instruments do not include Simulator guest events.",
                         )
                     } else {
                         add(if (attachToRunningApp) "--attach" else "--launch")

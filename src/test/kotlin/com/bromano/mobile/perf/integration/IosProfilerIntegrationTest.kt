@@ -73,6 +73,7 @@ class IosProfilerIntegrationTest {
             InstrumentsProfiler(xcodeUtils, signpostOptions)
                 .execute(bundleIdentifier, attachTrace)
             assertTraceCreated(attachTrace, "os-signpost")
+            assertFixtureSignpostsEmitted(deviceId, launchProcessId)
 
             val profile =
                 InstrumentsConverter.convert(
@@ -158,5 +159,28 @@ class IosProfilerIntegrationTest {
         assertTrue(toc.contains("schema=\"$requiredSchema\""), "trace should include the $requiredSchema schema")
     }
 
+    private fun assertFixtureSignpostsEmitted(
+        deviceId: String,
+        processId: Long,
+    ) {
+        val predicate = "subsystem == \"$FIXTURE_LOG_SUBSYSTEM\" AND processID == $processId"
+        val signposts =
+            shell.runCommand(
+                "xcrun simctl spawn ${quote(deviceId)} log show --last 2m --style compact --info --debug " +
+                    "--signpost --predicate ${quote(predicate)}",
+                redirectOutput = ProcessBuilder.Redirect.PIPE,
+                redirectError = ProcessBuilder.Redirect.PIPE,
+            )
+        assertTrue(
+            signposts.contains("mperf.fixture.workload") && signposts.contains("mperf.fixture.checkpoint"),
+            "trace should include the fixture workload interval and checkpoint signposts; " +
+                "export excerpt: ${signposts.take(2_000)}",
+        )
+    }
+
     private fun quote(value: String): String = "'" + value.replace("'", "'\"'\"'") + "'"
+
+    private companion object {
+        const val FIXTURE_LOG_SUBSYSTEM = "com.bromano.mperf.integration.fixture"
+    }
 }
