@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-07-13
+
 ### Added
 
 - Added end-to-end Android emulator coverage for ad-hoc and Macrobenchmark Perfetto, Simpleperf, and ART method-trace collection. The standalone API 35 fixture uses Android Gradle Plugin 9.2.1, Macrobenchmark 1.4.1, and AndroidX Tracing 2.0.0-alpha09 without adding Android build dependencies to the CLI project.
@@ -35,7 +37,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Changed Instruments conversion to export all required schemas once and overlap that export with table-of-contents inspection, removing a duplicate Time Profiler export and cutting measured conversion latency by 48.8% on the checked-in benchmark trace.
 - Changed configuration writes to use an atomic temporary-file replacement, CLI startup to close its HTTP client, and documentation generation to avoid creating or reading the user's `~/.mperf/config.yml`.
 - Changed the installer to resolve release assets through structured GitHub API JSON, accept prerelease versions, retry transient downloads, verify checksums before installation, and stage downloads in a temporary directory.
-- Changed the release workflow to require SemVer tags on `main`, run the complete build and iOS integration suite, verify generated docs and JAR metadata, publish prereleases correctly, and emit verified SHA-256 assets and GitHub build-provenance attestations.
+- Changed the release workflow to require SemVer tags on `main`, run the complete build and iOS integration suite with one bounded Simulator-reset retry, verify generated docs and JAR metadata, publish prereleases correctly, and emit verified SHA-256 assets and GitHub build-provenance attestations.
 - Updated all GitHub Actions to current immutable commit pins, including Checkout 7.0.0, Setup Java 5.5.0, Gradle Actions 6.2.0, setup-xcode 1.7.0, Android Emulator Runner 2.38.0, build provenance 4.1.1, and action-gh-release 3.0.1.
 - Updated the README and generated CLI reference for current platform requirements, Android profiling behavior, secure path handling, iOS Simulator integration, `--time-limit`, development commands, and the release process.
 
@@ -47,6 +49,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Fixed transient Xcode 26 `xctrace` finalization failures leaving partial Instruments outputs and failing simulator collection; exit codes 1, 139, and 141 (`SIGPIPE`) now trigger one clean retry only when collection created a partial trace, while preflight and argument errors still fail immediately.
 - Fixed hosted Xcode 26 finalization stalls exhausting the bounded collection wait after creating a partial trace; deadline overruns retain timeout classification after termination, the previous process must be confirmed reaped before the guarded clean retry, and unreapable processes fail without starting an overlapping collection.
 - Fixed Xcode 26 instability while finalizing host-wide, multi-instrument Simulator traces by keeping the live Time Profiler launch capture focused on samples and validating Points of Interest in a separate Logging attach capture; the test also verifies the fixture markers through the Simulator unified log because Xcode's reliable host-wide fallback cannot include guest log events.
+- Fixed timed Instruments recordings using a two-minute process deadline regardless of the requested duration. Collection now allows the requested `--time-limit` plus a bounded three-minute Xcode startup and finalization grace period before terminating a stuck process.
 - Fixed Macrobenchmark failures being treated as successful collections and stale output files being selected when a run did not produce a new trace.
 - Fixed ART method tracing using the wall-clock flag before its supported API level and pulling traces before Android finished writing them.
 - Fixed Perfetto and Simpleperf sessions failing nondeterministically when profiler process startup took longer than a fixed delay.
@@ -55,6 +58,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Fixed iOS simulator collection hangs caused by unreliable `xctrace --launch` behavior, ambiguous UUID-based device classification, display-name bundle lookup, and incomplete process-registration timing.
 - Fixed converted simulator profiles mixing unrelated host processes or resolving frames against another process's overlapping image addresses by preserving per-library PIDs and filtering converted output to the selected simulator app process. The unavoidable host-wide raw-trace fallback is now warned and documented explicitly.
 - Fixed Instruments parser failures on current Xcode XML layouts, XML declarations or leading output, and run numbers below one.
+- Fixed `xctrace export` crashes on large Instruments traces by writing XPath and table-of-contents XML to securely quoted temporary files instead of streaming large exports through stdout; partial files are cleared before retry and always removed afterward. Reported by @ldct in #9.
 - Fixed generated docs mutating user configuration and fixed configuration writes that could leave partially written YAML after interruption.
 - Fixed command-line splitting for escaped characters, empty quoted arguments, general whitespace, trailing escapes, and unterminated quotes.
 - Fixed output-directory creation for bare filenames, stale Instruments output reuse, unsupported Instruments instrumentation-test calls silently succeeding, and the main HTTP client leaking resources.
@@ -69,4 +73,5 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Made the release installer require a valid checksum asset and reject mismatches before replacing an installed JAR.
 - Pinned the Gradle distribution, profiler binaries, release artifacts, and third-party GitHub Actions to verified checksums or immutable revisions, and added GitHub artifact provenance attestations for published JARs.
 
-[Unreleased]: https://github.com/benjaminromano/mperf/compare/v1.0.5...HEAD
+[Unreleased]: https://github.com/benjaminromano/mperf/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/benjaminromano/mperf/compare/v1.0.5...v1.1.0

@@ -235,6 +235,34 @@ class XcodeUtilsTest {
     }
 
     @Test
+    fun `record deadline includes requested duration and finalization grace`() {
+        var waitTimeout: Long? = null
+        var waitUnit: TimeUnit? = null
+        val simulatorShell =
+            object : FakeShell() {
+                override fun waitFor(
+                    process: Process,
+                    timeout: Long,
+                    unit: TimeUnit,
+                ): Boolean {
+                    waitTimeout = timeout
+                    waitUnit = unit
+                    return true
+                }
+            }
+        val simulatorId = "12345678-1234-1234-1234-123456789012"
+        simulatorShell.runCommandResponses["xcrun simctl list devices available --json"] = simulatorJson()
+        simulatorShell.runCommandResponses["xcrun simctl spawn '$simulatorId' launchctl list"] =
+            "123\t0\tUIKitApplication:com.example.app[abc]"
+        val simulatorUtils = XcodeUtils(simulatorId, simulatorShell, processStarter = { RecordingProcess() })
+
+        simulatorUtils.record("Time Profiler", emptyList(), "com.example.app", "/tmp/output.trace", "2m")
+
+        assertEquals(TimeUnit.MINUTES.toMillis(5), waitTimeout)
+        assertEquals(TimeUnit.MILLISECONDS, waitUnit)
+    }
+
+    @Test
     fun `record reports non-retryable failure when timed-out process cannot be reaped`() {
         val waitResults = ArrayDeque(listOf(false, false, false))
         val simulatorShell =

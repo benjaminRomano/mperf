@@ -13,7 +13,7 @@ permissions:
 jobs:
   build-and-release:
     runs-on: macos-26
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -62,8 +62,23 @@ jobs:
           TAG_NO_V="${RELEASE_VERSION#v}"
           echo "Building release version: $TAG_NO_V"
           ./gradlew --no-daemon --stacktrace --warning-mode=all \
-            -Dmperf.integration.ios.enabled=true \
             -PreleaseVersion="$TAG_NO_V" clean build shadowJar generateDocs
+
+      - name: Run iOS integration tests
+        run: |
+          for attempt in 1 2; do
+            if ./gradlew test --no-daemon --stacktrace \
+              -Dmperf.integration.ios.enabled=true \
+              --tests com.bromano.mobile.perf.integration.IosProfilerIntegrationTest \
+              --tests com.bromano.mobile.perf.gecko.InstrumentsConverterTest; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 2 ]; then
+              exit 1
+            fi
+            echo "::warning::Xcode failed the live integration run; resetting Simulators and retrying once"
+            xcrun simctl shutdown all || true
+          done
 
       - name: Verify generated documentation is current
         run: git diff --exit-code -- docs/cli.md
