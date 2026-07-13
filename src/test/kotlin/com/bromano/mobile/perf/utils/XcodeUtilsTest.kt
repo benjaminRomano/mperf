@@ -2,11 +2,17 @@ package com.bromano.mobile.perf.utils
 
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
+import java.io.OutputStream
 import java.nio.file.Path
+import java.util.concurrent.TimeUnit
 import kotlin.io.path.writeText
 
 class XcodeUtilsTest {
@@ -200,6 +206,64 @@ class XcodeUtilsTest {
     }
 
     @Test
+    fun `record preserves timeout classification after graceful termination`() {
+        val waitResults = ArrayDeque(listOf(false, true))
+        val simulatorShell =
+            object : FakeShell() {
+                override fun waitFor(
+                    process: Process,
+                    timeout: Long,
+                    unit: TimeUnit,
+                ): Boolean = waitResults.removeFirst()
+            }
+        val simulatorId = "12345678-1234-1234-1234-123456789012"
+        simulatorShell.runCommandResponses["xcrun simctl list devices available --json"] = simulatorJson()
+        simulatorShell.runCommandResponses["xcrun simctl spawn '$simulatorId' launchctl list"] =
+            "123\t0\tUIKitApplication:com.example.app[abc]"
+        val process = RecordingProcess()
+        val simulatorUtils = XcodeUtils(simulatorId, simulatorShell, processStarter = { process })
+
+        val error =
+            assertThrows(IllegalStateException::class.java) {
+                simulatorUtils.record("Time Profiler", emptyList(), "com.example.app", "/tmp/output.trace", "1s")
+            }
+
+        assertEquals("xctrace did not stop before the collection timeout; the trace may be unusable", error.message)
+        assertTrue(process.destroyCalled)
+        assertFalse(process.destroyForciblyCalled)
+        assertTrue(waitResults.isEmpty())
+    }
+
+    @Test
+    fun `record reports non-retryable failure when timed-out process cannot be reaped`() {
+        val waitResults = ArrayDeque(listOf(false, false, false))
+        val simulatorShell =
+            object : FakeShell() {
+                override fun waitFor(
+                    process: Process,
+                    timeout: Long,
+                    unit: TimeUnit,
+                ): Boolean = waitResults.removeFirst()
+            }
+        val simulatorId = "12345678-1234-1234-1234-123456789012"
+        simulatorShell.runCommandResponses["xcrun simctl list devices available --json"] = simulatorJson()
+        simulatorShell.runCommandResponses["xcrun simctl spawn '$simulatorId' launchctl list"] =
+            "123\t0\tUIKitApplication:com.example.app[abc]"
+        val process = RecordingProcess()
+        val simulatorUtils = XcodeUtils(simulatorId, simulatorShell, processStarter = { process })
+
+        val error =
+            assertThrows(IllegalStateException::class.java) {
+                simulatorUtils.record("Time Profiler", emptyList(), "com.example.app", "/tmp/output.trace", "1s")
+            }
+
+        assertEquals("xctrace could not be terminated after the collection timeout", error.message)
+        assertTrue(process.destroyCalled)
+        assertTrue(process.destroyForciblyCalled)
+        assertTrue(waitResults.isEmpty())
+    }
+
+    @Test
     fun `isAppInstalled checks exact simulator bundle identifier`() {
         val simulatorShell = FakeShell()
         val simulatorId = "12345678-1234-1234-1234-123456789012"
@@ -211,5 +275,38 @@ class XcodeUtilsTest {
 
         assertTrue(simulatorUtils.isAppInstalled("com.example.app"))
         assertFalse(simulatorUtils.isAppInstalled("com.example.other"))
+    }
+
+    private class RecordingProcess : Process() {
+        var destroyCalled = false
+            private set
+        var destroyForciblyCalled = false
+            private set
+
+        override fun getOutputStream(): OutputStream = ByteArrayOutputStream()
+
+        override fun getInputStream(): InputStream = ByteArrayInputStream(ByteArray(0))
+
+        override fun getErrorStream(): InputStream = ByteArrayInputStream(ByteArray(0))
+
+        override fun waitFor(): Int = 0
+
+        override fun waitFor(
+            timeout: Long,
+            unit: TimeUnit,
+        ): Boolean = error("Shell controls waits in this test")
+
+        override fun exitValue(): Int = if (destroyCalled) 143 else 0
+
+        override fun destroy() {
+            destroyCalled = true
+        }
+
+        override fun destroyForcibly(): Process {
+            destroyForciblyCalled = true
+            return this
+        }
+
+        override fun isAlive(): Boolean = !destroyCalled || destroyForciblyCalled
     }
 }

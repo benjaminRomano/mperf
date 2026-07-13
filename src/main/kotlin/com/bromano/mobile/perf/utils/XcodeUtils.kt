@@ -20,6 +20,7 @@ class XcodeUtils(
     private val awaitStop: () -> Unit = { readlnOrNull() },
     private val temporaryFile: () -> Path = { Files.createTempFile("mperf-devicectl", ".json") },
     private val awaitSimulatorProcessRegistration: () -> Unit = { Thread.sleep(1_000) },
+    private val processStarter: (ProcessBuilder) -> Process = { it.start() },
 ) {
     var lastRecordedProcessId: Long? = null
         private set
@@ -272,12 +273,12 @@ class XcodeUtils(
                     }
                 }.joinToString(" ") { shellQuote(it) }
 
-        val process =
+        val processBuilder =
             shell
                 .newProcessBuilder(cmd)
                 .redirectErrorStream(true)
                 .redirectOutput(ProcessBuilder.Redirect.PIPE)
-                .start()
+        val process = processStarter(processBuilder)
 
         // HACK: IntelliJ debug window doesn't support Ctrl-C, so replace with press any key to terminate.
         val inputProcessor =
@@ -285,7 +286,7 @@ class XcodeUtils(
                 process.inputStream.forwardToStdout()
             }
 
-        var stopped =
+        val stoppedWithinDeadline =
             if (timeLimit == null) {
                 awaitStop()
                 shell.startProcess("kill -INT ${process.pid()}")
@@ -293,17 +294,20 @@ class XcodeUtils(
             } else {
                 shell.waitFor(process, 2, TimeUnit.MINUTES)
             }
-        if (!stopped) {
+        if (!stoppedWithinDeadline) {
             process.destroy()
-            stopped = shell.waitFor(process, 10, TimeUnit.SECONDS)
-        }
-        inputProcessor.cancel()
-
-        if (!stopped) {
-            process.destroyForcibly()
-            shell.waitFor(process, 10, TimeUnit.SECONDS)
+            var terminated = shell.waitFor(process, 10, TimeUnit.SECONDS)
+            if (!terminated) {
+                process.destroyForcibly()
+                terminated = shell.waitFor(process, 10, TimeUnit.SECONDS)
+            }
+            inputProcessor.cancel()
+            if (!terminated) {
+                throw IllegalStateException("xctrace could not be terminated after the collection timeout")
+            }
             throw IllegalStateException("xctrace did not stop before the collection timeout; the trace may be unusable")
         }
+        inputProcessor.cancel()
         if (process.exitValue() != 0) {
             throw IllegalStateException("xctrace exited with code ${process.exitValue()}")
         }

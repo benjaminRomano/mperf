@@ -209,6 +209,23 @@ class InstrumentsProfilerTest {
     }
 
     @Test
+    fun `execute does not retry when a timed-out xctrace cannot be reaped`() {
+        val output = createTempDirectory("instruments-profiler-unreaped").resolve("trace.trace")
+        doAnswer { invocation ->
+            Files.createDirectories(Path.of(invocation.getArgument<String>(3)))
+            throw IllegalStateException("xctrace could not be terminated after the collection timeout")
+        }.whenever(mockXcodeUtils).record(any<String>(), any<List<String>>(), any<String>(), any<String>(), isNull())
+
+        val error =
+            assertThrows(IllegalStateException::class.java) {
+                InstrumentsProfiler(mockXcodeUtils, InstrumentsProfilerOptions()).execute("com.example.app", output)
+            }
+
+        assertTrue(error.message!!.contains("could not be terminated"))
+        verify(mockXcodeUtils).record(any<String>(), any<List<String>>(), any<String>(), any<String>(), isNull())
+    }
+
+    @Test
     fun `executeTest fails explicitly because Android instrumentation is unsupported`() {
         val profiler = InstrumentsProfiler(mockXcodeUtils, InstrumentsProfilerOptions())
 
