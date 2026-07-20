@@ -43,7 +43,7 @@ val forwardedTestSystemProperties =
     )
 
 dependencies {
-    implementation(platform("org.jetbrains.kotlin:kotlin-bom:2.4.0"))
+    implementation(platform("org.jetbrains.kotlin:kotlin-bom:2.4.10"))
     implementation("com.github.ajalt.clikt:clikt:5.1.0")
     implementation("com.github.ajalt.clikt:clikt-markdown:5.1.0")
     implementation("com.google.protobuf:protobuf-kotlin:4.35.1")
