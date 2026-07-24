@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Added `mperf faults android` and `mperf faults ios` for cold-start page-fault collection, strict cache-residency
+  evidence, file and section attribution, cross-capture comparison, symbolicated iOS fault stacks, and self-contained
+  interactive HTML reports.
+
 ## [1.1.0] - 2026-07-13
 
 ### Added

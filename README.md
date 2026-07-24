@@ -11,6 +11,7 @@ platform profilers and supports collection over both ad-hoc app sessions and sin
 - Perfetto
 - Simpleperf
 - Instruments
+- Startup page faults on Android and iOS
 
 **Collection Modes**
 
@@ -27,7 +28,7 @@ platform profilers and supports collection over both ad-hoc app sessions and sin
 
 - Java 21+
 - Android SDK Platform‑Tools (`adb` on PATH)
-- `python3`, `tar`, and `gzip` on PATH
+- Python 3.13+, [`uv`](https://docs.astral.sh/uv/), `tar`, and `gzip` on PATH
 - Full Xcode installation with an active developer directory (for `xctrace`, Instruments, and Simulator)
 - macOS or Linux
 
@@ -90,6 +91,18 @@ iperf start -b com.example.app --template "Time Profiler" --ui instruments
 
 The trace can be opened directly in Instruments, or exported for Firefox Profiler / Perfetto via the `--ui` flag.
 
+**Android: collect and visualize startup page faults**
+
+```bash
+mperf faults android -p com.example.app --reboot-before-collect
+```
+
+**iOS Simulator: collect startup VM faults and stacks**
+
+```bash
+mperf faults ios --app path/to/MyApp.app --require-cold-cache --allow-host-pressure
+```
+
 ## Usage
 
 Full usage details can be found in [CLI Reference Docs](/docs/cli.md)
@@ -99,6 +112,55 @@ Full usage details can be found in [CLI Reference Docs](/docs/cli.md)
 - `ios start` — record an Instruments session for a running app
 - `android start` — record an ad-hoc session for a running Android app
 - `android collect` — run a single Macrobenchmark test iteration and collect a trace
+- `faults android` — collect exact Android startup faults and generate an interactive report
+- `faults ios` — collect iOS startup VM events and stacks and generate an interactive report
+
+### Startup Page Faults
+
+`mperf faults` captures fault order, file and section attribution, major/minor classification, cache evidence, and
+interactive Plotly visualizations. Reports are written to `artifacts/faults/` by default. The first run extracts a
+versioned analysis engine into `~/.mperf/cache/faults-engine/` and creates its locked Python environment with `uv`.
+
+On Android, the collector uses kernel `perf_event_open` page-fault events and `PERF_RECORD_MMAP2` mappings. It
+attributes each fault to the mapped file and file offset, including APK entries and ODEX/VDEX sections when pulled
+artifacts are available. Collection requires an emulator or device where the collector can run as root; a `userdebug`
+or `eng` build is recommended. The command drops page cache through the privileged shell, verifies app-file residency
+with `mincore` immediately before launch, and fails a strict cold-cache run when the configured residency limit is
+exceeded. `--reboot-before-collect` provides the strongest reproducible setup. Reprocess a saved capture with
+`--skip-collect`, or compare captures with `--compare`.
+
+```bash
+mperf faults android \
+  --package com.example.app \
+  --device emulator-5554 \
+  --reboot-before-collect
+```
+
+On iOS, the command uses Instruments' Virtual Memory Trace and includes symbolicated fault stacks in a chronological,
+Firefox-Profiler-style stack view. For Simulator captures, Instruments observes the macOS host process: the report
+filters to the app PID, and its storage behavior must not be interpreted as physical-device behavior. “Major” means a
+file-backed page-in operation; “minor” groups cache hits, zero-fill, copy-on-write, and decompression events. These are
+analysis buckets derived from Instruments operations, not Darwin kernel fault labels.
+
+Simulator cache verification inventories app-bundle files and checks their residency with `mincore` immediately before
+launch. `auto` first attempts the host `purge` utility and can use bounded memory pressure when
+`--allow-host-pressure` is supplied. `--require-cold-cache` rejects a run unless eviction is confirmed. iOS does not
+provide a supported global page-cache drop on physical devices; physical-device runs can reboot or use the included
+best-effort signed pressure helper, but cannot provide the same strict cache guarantee as a rooted Android target or
+Simulator residency check.
+
+```bash
+mperf faults ios \
+  --app path/to/MyApp.app \
+  --device booted \
+  --cache-policy auto \
+  --allow-host-pressure \
+  --require-cold-cache
+```
+
+The HTML reports are self-contained and show the all-file address/time pattern, per-file timelines, sequentiality,
+APK/DEX and VDEX/ODEX sections, major/minor evidence, comparison views, and available fault stacks. See the
+[`faults` CLI reference](docs/cli.md#faults) or run either platform command with `--help` for the full option set.
 
 ### Perfetto (Default)
 
