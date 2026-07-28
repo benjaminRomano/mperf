@@ -28,6 +28,7 @@ class FaultEngineTest {
         assertTrue(first.resolve("android/native/page_fault_collector.c").exists())
         assertTrue(first.resolve("android/trace_processor").toFile().canExecute())
         assertTrue(first.resolve("ios/faults.py").exists())
+        assertTrue(first.resolve("ios/native/residency.c").exists())
         assertTrue(first.resolve("ios/cache-pressure/CachePressure.xcodeproj/project.pbxproj").exists())
         assertTrue(first.resolve("ios/ios_fault_visualizer/assets/plotly.min.js").exists())
         assertTrue(Files.size(first.resolve("ios/ios_fault_visualizer/assets/plotly.min.js")) > 4_000_000)

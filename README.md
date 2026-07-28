@@ -119,7 +119,9 @@ Full usage details can be found in [CLI Reference Docs](/docs/cli.md)
 
 `mperf faults` captures fault order, file and section attribution, major/minor classification, cache evidence, and
 interactive Plotly visualizations. Reports are written to `artifacts/faults/` by default. The first run extracts a
-versioned analysis engine into `~/.mperf/cache/faults-engine/` and creates its locked Python environment with `uv`.
+versioned analysis engine into `~/.mperf/cache/faults-engine/`. Capture orchestration, trace preprocessing, VDEX/DEX
+validation, Instruments XML parsing, and report generation run in Kotlin; the bundled Python sources remain only as
+compatibility/reference material and are not invoked by either `faults` command.
 
 On Android, the collector uses kernel `perf_event_open` page-fault events and `PERF_RECORD_MMAP2` mappings. It
 attributes each fault to the mapped file and file offset, including APK entries and whole ODEX/VDEX files when pulled
@@ -138,7 +140,11 @@ not minor faults and are not added to the fault total.
 Collection requires an emulator or device where the collector can run as root; a `userdebug` or `eng` build is
 recommended. The command reads the exact online CPU list from sysfs, drops page cache through the privileged shell,
 verifies app-file residency with `mincore` immediately before launch, and fails a strict cold-cache run when the
-configured residency limit is exceeded. `--reboot-before-collect` provides the strongest reproducible setup.
+configured residency limit is exceeded. The default limit is zero. Some Android 16 emulator images keep a small,
+repeatable set of APK pages resident even after global cache drop and file-scoped eviction; in that case the command
+fails rather than claiming a fully cold run. Use an explicit small `--max-resident-pages` tolerance only when that
+residual state is acceptable. The report shows the measured page count, threshold, per-phase residency, and warnings.
+`--reboot-before-collect` provides the strongest reproducible setup.
 Reprocess a saved capture with `--skip-collect` (the package identity is read from the capture), or compare captures
 with `--compare`.
 
@@ -146,10 +152,21 @@ with `--compare`.
 mperf faults android \
   --package com.example.app \
   --device emulator-5554 \
-  --reboot-before-collect
+  --reboot-before-collect \
+  --native-stacks
 ```
 
-For supplementary Android fault call stacks, use Simpleperf in a separate run:
+`--native-stacks` adds frame-pointer instruction-pointer callchains to the same perf record as each exact fault
+address, timestamp, PID/TID, and major/minor classification. Because the system-wide collector is ready before the
+app is created, these callchains include the beginning of startup. The report maps user frames to the file and offset
+active at that timestamp. It does not claim function-level symbolication: managed/JIT/interpreter frames and native
+code built without usable frame pointers may be incomplete, and every lost, throttled, overflowed, or malformed record
+invalidates the capture.
+On Linux kernels that predate `PERF_FORMAT_LOST`, mperf records that only
+ring-delivered loss records were available; the report calls out that weaker
+completeness guarantee instead of claiming counter-backed zero loss.
+
+For supplementary function-symbolized Android fault stacks, use Simpleperf in a separate run:
 
 ```bash
 mperf android start \
@@ -173,6 +190,8 @@ analysis buckets derived from Instruments operations, not Darwin kernel fault la
 
 The recorder is started first and the app is not launched until `xctrace` emits its explicit
 `--notify-tracing-started` notification. A bounded readiness timeout aborts and reaps the recorder on failure. The
+capture records host-monotonic recorder-ready and launch timestamps so this ordering can be audited after the fact.
+Every retained row is filtered by the exact numeric launch PID, not an application-name match. The
 report attributes frames to the installed application bundle root, including bundled frameworks and `.appex`
 extensions; similarly structured binaries from another app are excluded. Code-ordering candidates require the
 faulting binary itself—not merely a caller deeper in the stack—to be app-bundle owned.
@@ -194,9 +213,9 @@ mperf faults ios \
 ```
 
 The HTML reports are self-contained and show the all-file address/time pattern, per-file timelines, sequentiality,
-APK/DEX and VDEX/ODEX attribution, major/minor evidence, comparison views, and iOS fault stacks. Android's exact
-fault collector records the instruction pointer but does not currently unwind a call stack; Simpleperf can collect
-supplementary sampled fault stacks in a separate, more intrusive run. See the
+APK/DEX and VDEX/ODEX attribution, major/minor evidence, comparison views, and ordered fault callchains. Android can
+capture exact same-event frame-pointer callchains with file/offset mapping; app-attached Simpleperf remains a separate
+supplement when function symbols or DWARF-managed frames matter more than observing the first startup faults. See the
 [`faults` CLI reference](docs/cli.md#faults) or run either platform command with `--help` for the full option set.
 
 ### Perfetto (Default)

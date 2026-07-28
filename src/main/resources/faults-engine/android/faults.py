@@ -14,6 +14,7 @@ import struct
 import subprocess
 import tempfile
 import time
+from collections import defaultdict, deque
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable, Optional
@@ -28,6 +29,7 @@ REMOTE_DIR = "/data/local/tmp/android-fault-visualizer"
 REMOTE_COLLECTOR = f"{REMOTE_DIR}/page_fault_collector"
 REMOTE_FAULTS = f"{REMOTE_DIR}/fault_events.csv"
 REMOTE_MAPPINGS = f"{REMOTE_DIR}/mapping_events.csv"
+REMOTE_CALLCHAINS = f"{REMOTE_DIR}/fault_callchains.csv"
 CAPTURE_MARKER = ".android-fault-visualizer-capture"
 CAPTURE_MARKER_CONTENT = "android-fault-visualizer capture v1\n"
 CACHE_RESIDENCY_FIELDS = [
@@ -1176,12 +1178,19 @@ def stop_perfetto(adb: Adb, process: subprocess.Popen, device_pid: int) -> None:
         raise RuntimeError("Unable to stop Perfetto cleanly: " + stdout.strip())
 
 
-def start_fault_collector(adb: Adb) -> tuple[subprocess.Popen, int, int, str]:
+def start_fault_collector(
+    adb: Adb, capture_stacks: bool
+) -> tuple[subprocess.Popen, int, int, str]:
     command = (
         f"{shlex.quote(REMOTE_COLLECTOR)} "
         f"--output {shlex.quote(REMOTE_FAULTS)} "
         f"--mappings-output {shlex.quote(REMOTE_MAPPINGS)} "
-        "--duration-ms 60000"
+        + (
+            f"--callchains-output {shlex.quote(REMOTE_CALLCHAINS)} "
+            if capture_stacks
+            else ""
+        )
+        + "--duration-ms 60000"
     )
     process = subprocess.Popen(
         adb.root_command(command),
@@ -1219,12 +1228,17 @@ def stop_fault_collector(
         r"capture_end_ns=(?P<end>\d+) "
         r"samples=(?P<samples>\d+) mappings=(?P<mappings>\d+) "
         r"lost=(?P<lost>\d+) integrity_errors=(?P<integrity_errors>\d+) "
-        r"throttled=(?P<throttled>\d+)",
+        r"throttled=(?P<throttled>\d+)"
+        r"(?: callchain_entries=(?P<callchain_entries>\d+))?"
+        r"(?: callchain_overflow=(?P<callchain_overflow>\d+))?"
+        r"(?: lost_counter_supported=(?P<lost_counter_supported>[01]))?",
         stdout,
     )
     if not match:
         raise RuntimeError("Fault collector returned invalid metadata:\n" + stdout)
-    metadata = {key: int(value) for key, value in match.groupdict().items()}
+    metadata = {
+        key: int(value) for key, value in match.groupdict().items() if value is not None
+    }
     return process.returncode or 0, metadata
 
 
@@ -1331,6 +1345,7 @@ def collect(
     should_pull_apks: bool,
     max_resident_pages: int,
     rebooted_before_collect: bool,
+    capture_stacks: bool,
 ) -> None:
     adb.ensure_root()
     sdk = int(adb.getprop("ro.build.version.sdk"))
@@ -1365,7 +1380,8 @@ def collect(
             check=True,
         ).stdout.strip(),
         "collector": "perf-software-page-fault-events",
-        "collector_version": 3,
+        "collector_version": 4,
+        "capture_native_callchains": capture_stacks,
         "cache_procedure": (
             "force-stop-wait+stable-target-set+sync+drop_caches+fadvise+mincore-v3"
         ),
@@ -1440,7 +1456,7 @@ def collect(
             collector_pid,
             collector_start,
             collector_online_cpus,
-        ) = start_fault_collector(adb)
+        ) = start_fault_collector(adb, capture_stacks)
         metadata["collector_start_ns"] = collector_start
         metadata["collector_online_cpus"] = collector_online_cpus
         if collector_online_cpus != metadata["online_cpus_sysfs"]:
@@ -1562,15 +1578,26 @@ def collect(
                 {f"collector_{key}": value for key, value in collector_metadata.items()}
             )
             metadata["collector_return_code"] = return_code
+            metadata["collector_loss_detection"] = (
+                "counter_and_ring"
+                if collector_metadata.get("lost_counter_supported") == 1
+                else "ring_records_only"
+            )
         if perfetto_process is not None and perfetto_pid is not None:
             stop_perfetto(adb, perfetto_process, perfetto_pid)
 
     adb.pull_with_root_fallback(REMOTE_FAULTS, output_dir / "fault_events.csv")
     adb.pull_with_root_fallback(REMOTE_MAPPINGS, output_dir / "mapping_events.csv")
+    if capture_stacks:
+        adb.pull_with_root_fallback(
+            REMOTE_CALLCHAINS,
+            output_dir / "fault_callchains.csv",
+        )
     adb.pull_with_root_fallback(remote_trace, output_dir / "faults.pftrace")
     adb.root_shell(
         f"rm -f {shlex.quote(REMOTE_FAULTS)} "
-        f"{shlex.quote(REMOTE_MAPPINGS)} {shlex.quote(remote_trace)}",
+        f"{shlex.quote(REMOTE_MAPPINGS)} "
+        f"{shlex.quote(REMOTE_CALLCHAINS)} {shlex.quote(remote_trace)}",
         check=True,
     )
 
@@ -1579,11 +1606,13 @@ def collect(
 
     integrity_failures = {
         key: int(metadata.get(f"collector_{key}", 0))
-        for key in ("lost", "integrity_errors", "throttled")
+        for key in ("lost", "integrity_errors", "throttled", "callchain_overflow")
     }
     if int(metadata.get("collector_return_code", 0)) != 0 or any(
         integrity_failures.values()
     ):
+        metadata["capture_status"] = "collector_integrity_failed"
+        write_capture_metadata(output_dir, metadata)
         raise RuntimeError(
             "Fault collector integrity failure: "
             + ", ".join(f"{key}={value}" for key, value in integrity_failures.items())
@@ -1807,6 +1836,179 @@ def write_fault_csvs(
     return all_faults, mapped_faults
 
 
+PERF_CONTEXT_NAMES = {
+    0xFFFFFFFFFFFFFFE0: "hypervisor",
+    0xFFFFFFFFFFFFFF80: "kernel",
+    0xFFFFFFFFFFFFFE00: "user",
+    0xFFFFFFFFFFFFF800: "guest",
+    0xFFFFFFFFFFFFF780: "guest_kernel",
+    0xFFFFFFFFFFFFF600: "guest_user",
+}
+
+
+def write_fault_callchains(
+    output_dir: Path,
+    pid: int,
+    abi: str,
+    all_faults: list[dict[str, object]],
+    map_entries: list[MapEntry],
+    mapping_events: list[MappingEvent],
+) -> dict[str, int]:
+    source = output_dir / "fault_callchains.csv"
+    output = output_dir / "resolved_fault_callchains.csv"
+    fields = [
+        "sequence",
+        "ts",
+        "elapsed_ms",
+        "event_type",
+        "is_major",
+        "tid",
+        "fault_address",
+        "fault_file_name",
+        "fault_offset",
+        "frame_index",
+        "frame_kind",
+        "raw_ip",
+        "ip",
+        "file_name",
+        "file_offset",
+        "label",
+    ]
+    if not source.exists():
+        output.unlink(missing_ok=True)
+        return {
+            "faults_with_callchains": 0,
+            "callchain_frames": 0,
+            "resolved_user_frames": 0,
+            "unresolved_user_frames": 0,
+        }
+
+    raw_chains: dict[int, list[int]] = defaultdict(list)
+    raw_fault_keys: dict[int, tuple[int, int, int, int, str]] = {}
+    with source.open() as file:
+        for row in csv.DictReader(file):
+            row_pid = int(row["pid"])
+            if row_pid != pid:
+                continue
+            raw_index = int(row["fault_index"])
+            ip = int(row["ip"], 16)
+            if ip != 0:
+                raw_chains[raw_index].append(ip)
+            raw_fault_keys[raw_index] = (
+                row_pid,
+                int(row["timestamp_ns"]),
+                int(row["tid"]),
+                int(row["address"], 16),
+                row["event_type"],
+            )
+
+    chains_by_key: dict[tuple[int, int, int, int, str], deque[list[int]]] = defaultdict(
+        deque
+    )
+    for raw_index, chain in raw_chains.items():
+        chains_by_key[raw_fault_keys[raw_index]].append(chain)
+
+    rows: list[dict[str, object]] = []
+    faults_with_callchains = 0
+    resolved_user_frames = 0
+    unresolved_user_frames = 0
+    for fault in all_faults:
+        key = (
+            pid,
+            int(fault["ts"]),
+            int(fault["tid"]),
+            int(fault["address"]),
+            str(fault["event_type"]),
+        )
+        candidates = chains_by_key.get(key)
+        if not candidates:
+            raise RuntimeError(
+                "Missing exact native callchain for startup fault "
+                f"sequence={fault['sequence']} ts={fault['ts']} tid={fault['tid']} "
+                f"address=0x{int(fault['address']):x} event={fault['event_type']}"
+            )
+        chain = candidates.popleft()
+        faults_with_callchains += 1
+        context = "unknown"
+        context_frame_index = 0
+        for frame_index, raw_ip in enumerate(chain):
+            context_name = PERF_CONTEXT_NAMES.get(raw_ip)
+            if context_name is not None:
+                context = context_name
+                context_frame_index = 0
+                continue
+            adjustment = 0
+            if context_frame_index > 0:
+                adjustment = 2 if abi in {"arm64-v8a", "armeabi-v7a"} else 1
+            normalized_ip = (
+                raw_ip & 0x00FFFFFFFFFFFFFF
+                if abi == "arm64-v8a" and context == "user"
+                else raw_ip
+            )
+            ip = max(0, normalized_ip - adjustment)
+            context_frame_index += 1
+            file_name = None
+            file_offset = None
+            if context == "user":
+                mapping = find_map_entry_at(
+                    map_entries,
+                    mapping_events,
+                    ip,
+                    int(fault["ts"]),
+                )
+                if mapping is not None:
+                    file_name = (
+                        mapping.file_name.removesuffix(" (deleted)")
+                        if mapping.file_name
+                        else None
+                    )
+                    if file_name is not None:
+                        file_offset = (
+                            mapping.file_offset + ip - mapping.begin_address
+                        )
+                        resolved_user_frames += 1
+                    else:
+                        unresolved_user_frames += 1
+                else:
+                    unresolved_user_frames += 1
+            label = (
+                f"{Path(file_name).name}+0x{file_offset:x}"
+                if file_name and file_offset is not None
+                else (f"[kernel]+0x{ip:x}" if context == "kernel" else f"0x{ip:x}")
+            )
+            rows.append(
+                {
+                    "sequence": fault["sequence"],
+                    "ts": fault["ts"],
+                    "elapsed_ms": fault["elapsed_ms"],
+                    "event_type": fault["event_type"],
+                    "is_major": fault["is_major"],
+                    "tid": fault["tid"],
+                    "fault_address": fault["address"],
+                    "fault_file_name": fault["file_name"],
+                    "fault_offset": fault["offset"],
+                    "frame_index": frame_index,
+                    "frame_kind": context,
+                    "raw_ip": raw_ip,
+                    "ip": ip,
+                    "file_name": file_name,
+                    "file_offset": file_offset,
+                    "label": label,
+                }
+            )
+
+    with output.open("w", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+    return {
+        "faults_with_callchains": faults_with_callchains,
+        "callchain_frames": len(rows),
+        "resolved_user_frames": resolved_user_frames,
+        "unresolved_user_frames": unresolved_user_frames,
+    }
+
+
 def write_page_cache_events(
     output_dir: Path,
     trace: Path,
@@ -1975,6 +2177,22 @@ def process_capture(output_dir: Path) -> None:
             "This capture predates timestamped mapping attribution. "
             "Recollect it with the current collector."
         )
+    if metadata.get("capture_status") != "collected":
+        raise RuntimeError(
+            "Capture is incomplete and cannot be processed: "
+            f"capture_status={metadata.get('capture_status')!r}"
+        )
+    integrity_failures = {
+        key: int(metadata.get(f"collector_{key}", 0))
+        for key in ("lost", "integrity_errors", "throttled", "callchain_overflow")
+    }
+    if int(metadata.get("collector_return_code", 0)) != 0 or any(
+        integrity_failures.values()
+    ):
+        raise RuntimeError(
+            "Capture failed collector integrity checks and cannot be processed: "
+            + ", ".join(f"{key}={value}" for key, value in integrity_failures.items())
+        )
     trace = output_dir / "faults.pftrace"
     startup = query_startup(trace, str(metadata["package"]))
     trace_integrity = query_trace_integrity(trace)
@@ -2052,6 +2270,14 @@ def process_capture(output_dir: Path) -> None:
         file_sections,
         thread_names,
     )
+    callchain_results = write_fault_callchains(
+        output_dir,
+        int(metadata["pid"]),
+        str(metadata["abi"]),
+        all_faults,
+        map_entries,
+        mapping_events,
+    )
     page_cache_events = write_page_cache_events(
         output_dir,
         trace,
@@ -2081,6 +2307,7 @@ def process_capture(output_dir: Path) -> None:
             not bool(row["is_major"]) for row in mapped_faults
         ),
         "page_cache_insertions": len(page_cache_events),
+        **callchain_results,
     }
     metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n")
 
@@ -2169,6 +2396,14 @@ def main() -> None:
         help="Reboot the adb target and wait for boot completion before collection",
     )
     parser.add_argument(
+        "--capture-stacks",
+        action="store_true",
+        help=(
+            "Capture exact native/ART frame-pointer callchains in the same "
+            "perf records as fault addresses"
+        ),
+    )
+    parser.add_argument(
         "--overwrite",
         action="store_true",
         help="Replace a non-empty output carrying this tool's ownership marker",
@@ -2196,6 +2431,7 @@ def main() -> None:
             args.pull_apks,
             args.max_resident_pages,
             args.reboot_before_collect,
+            args.capture_stacks,
         )
     process_capture(output_dir)
     print(f"Analysis complete: {output_dir.resolve()}")

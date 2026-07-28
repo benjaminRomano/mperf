@@ -55,6 +55,7 @@ class Capture:
     page_cache: pd.DataFrame
     residency: pd.DataFrame
     vdex_boundaries: pd.DataFrame
+    callchains: pd.DataFrame
 
     @property
     def page_size(self) -> int:
@@ -81,6 +82,21 @@ def read_capture(path: Path, label: Optional[str] = None) -> Capture:
     metadata = json.loads(metadata_path.read_text())
     if metadata.get("schema_version") != 5:
         raise RuntimeError(f"Unsupported capture schema in {path}")
+    if metadata.get("capture_status") != "collected":
+        raise RuntimeError(
+            f"{path} is incomplete: capture_status={metadata.get('capture_status')!r}"
+        )
+    integrity_failures = {
+        key: int(metadata.get(f"collector_{key}", 0))
+        for key in ("lost", "integrity_errors", "throttled", "callchain_overflow")
+    }
+    if int(metadata.get("collector_return_code", 0)) != 0 or any(
+        integrity_failures.values()
+    ):
+        raise RuntimeError(
+            f"{path} failed collector integrity checks: "
+            + ", ".join(f"{key}={value}" for key, value in integrity_failures.items())
+        )
     missing_provenance = [
         field
         for field in COMPARISON_PROVENANCE_FIELDS
@@ -105,6 +121,7 @@ def read_capture(path: Path, label: Optional[str] = None) -> Capture:
         page_cache=read_csv("page_cache_events.csv"),
         residency=read_csv("cache_residency.csv"),
         vdex_boundaries=read_csv("vdex_dex_boundaries.csv"),
+        callchains=read_csv("resolved_fault_callchains.csv"),
     )
     for frame in (capture.all_faults, capture.mapped_faults):
         if not frame.empty:
@@ -125,7 +142,116 @@ def read_capture(path: Path, label: Optional[str] = None) -> Capture:
         capture.page_cache["source_label"] = capture.page_cache.apply(
             lambda row: source_label(row, capture.package), axis=1
         )
+    if not capture.callchains.empty and capture.callchains["is_major"].dtype != bool:
+        capture.callchains["is_major"] = capture.callchains["is_major"].map(
+            lambda value: str(value).lower() == "true"
+        )
     return capture
+
+
+def native_callchain_category(file_name: object, package: str) -> int:
+    path = "" if pd.isna(file_name) else str(file_name)
+    if is_app_owned_path(path, package):
+        return 0
+    if "libart.so" in path or "dalvik-jit-code-cache" in path:
+        return 1
+    if path.endswith((".oat", ".odex", ".vdex", ".jar", ".art")):
+        return 2
+    if path.startswith(("/system/", "/apex/", "/vendor/", "/product/")):
+        return 3
+    return 4
+
+
+def native_callchain_figure(capture: Capture) -> go.Figure:
+    frame = capture.callchains
+    if frame.empty:
+        return go.Figure()
+    user = frame[frame["frame_kind"] == "user"].copy()
+    if user.empty:
+        return go.Figure()
+    user = user.sort_values(["sequence", "frame_index"], ascending=[True, False])
+    grouped = list(user.groupby("sequence", sort=True))
+    maximum_depth = max(len(group) for _, group in grouped)
+    sequences = [int(sequence) for sequence, _ in grouped]
+    z: list[list[object]] = [[None for _ in grouped] for _ in range(maximum_depth)]
+    labels: list[list[object]] = [[None for _ in grouped] for _ in range(maximum_depth)]
+    paths: list[list[object]] = [[None for _ in grouped] for _ in range(maximum_depth)]
+    ips: list[list[object]] = [[None for _ in grouped] for _ in range(maximum_depth)]
+    major_sequences: list[int] = []
+    for column, (sequence, group) in enumerate(grouped):
+        for depth, (_, row) in enumerate(group.iterrows()):
+            z[depth][column] = native_callchain_category(
+                row.get("file_name"),
+                capture.package,
+            )
+            labels[depth][column] = row.get("label")
+            paths[depth][column] = row.get("file_name") or "unresolved"
+            ips[depth][column] = f"0x{int(row['ip']):x}"
+        if bool(group.iloc[0]["is_major"]):
+            major_sequences.append(int(sequence))
+    colors = ["#16a34a", "#7c3aed", "#2563eb", "#64748b", "#94a3b8"]
+    colorscale: list[list[object]] = []
+    for index, color in enumerate(colors):
+        start = max(0.0, (index - 0.5) / (len(colors) - 1))
+        end = min(1.0, (index + 0.5) / (len(colors) - 1))
+        colorscale.extend([[start, color], [end, color]])
+    figure = go.Figure(
+        go.Heatmap(
+            x=sequences,
+            y=list(range(maximum_depth)),
+            z=z,
+            customdata=[
+                [
+                    [labels[depth][column], paths[depth][column], ips[depth][column]]
+                    for column in range(len(grouped))
+                ]
+                for depth in range(maximum_depth)
+            ],
+            zmin=0,
+            zmax=len(colors) - 1,
+            colorscale=colorscale,
+            showscale=True,
+            colorbar=dict(
+                title="Frame",
+                tickmode="array",
+                tickvals=list(range(len(colors))),
+                ticktext=["App", "ART/JIT", "OAT/JAR", "System", "Unknown"],
+                thickness=14,
+            ),
+            hovertemplate=(
+                "Fault #%{x}<br>Depth %{y}<br><b>%{customdata[0]}</b><br>"
+                "%{customdata[1]}<br>%{customdata[2]}<extra></extra>"
+            ),
+            connectgaps=False,
+            xgap=0,
+            ygap=0,
+        )
+    )
+    if major_sequences:
+        figure.add_trace(
+            go.Scatter(
+                x=major_sequences,
+                y=[maximum_depth - 0.25] * len(major_sequences),
+                mode="markers",
+                name="Major fault",
+                marker=dict(color=MAJOR_COLOR, symbol="diamond", size=7),
+                hovertemplate="Major fault #%{x}<extra></extra>",
+            )
+        )
+    return figure_layout(
+        figure,
+        height=760,
+        margin=dict(l=72, r=120, t=70, b=72),
+    ).update_layout(
+        xaxis=dict(
+            title="Fault order within the startup interval",
+            rangeslider=dict(visible=True, thickness=0.07),
+        ),
+        yaxis=dict(
+            title="Captured frame depth (oldest captured → faulting frame)"
+        ),
+        hovermode="closest",
+    )
 
 
 def app_relative_path(file_name: str, package: str) -> str:
@@ -1119,6 +1245,12 @@ def quality_notes(capture: Capture) -> list[str]:
         if lost
         else "The perf collector reported zero lost samples."
     )
+    if capture.metadata.get("collector_loss_detection") == "ring_records_only":
+        notes.append(
+            "This kernel does not expose PERF_FORMAT_LOST. Loss detection relied "
+            "on ring-delivered loss records, so a final ring-full loss cannot be "
+            "excluded with the same strength as a modern kernel counter."
+        )
     cache = capture.metadata["cache_verification"]
     if cache["resident_pages"]:
         notes.append(
@@ -1233,6 +1365,11 @@ def build_report(
         ("categories", category_figure(capture)),
         ("page-cache", page_cache_figure(capture)),
     ]
+    if not capture.callchains.empty:
+        figures.insert(
+            1,
+            ("native-callchains", native_callchain_figure(capture)),
+        )
     comparison_frame = None
     if compare:
         figures.extend(
@@ -1367,6 +1504,32 @@ def build_report(
         </section>
         """
 
+    native_callchain_html = ""
+    if not capture.callchains.empty:
+        result = capture.metadata.get("results", {})
+        resolved = int(result.get("resolved_user_frames", 0))
+        unresolved = int(result.get("unresolved_user_frames", 0))
+        denominator = resolved + unresolved
+        resolution = resolved / denominator if denominator else 0
+        native_callchain_html = f"""
+        <section>
+          <h2>Exact fault-trigger callchains</h2>
+          <p>Optional frame-pointer callchains captured in the same perf record as
+          each fault's address, timestamp, PID/TID, and major/minor type. The
+          collector starts before process creation, so this includes the beginning
+          of startup that app-attached DWARF misses.</p>
+          <div class="chart">{rendered["native-callchains"]}</div>
+          <p class="chart-note">The oldest captured user frame is at the bottom
+          and the faulting frame is at the top. {resolved:,} user frames
+          ({resolution:.1%}) resolved to a
+          timestamp-valid process mapping. Frame-pointer unwinding is strongest
+          for native and ART code; managed Java frames may be incomplete.
+          Captures are rejected for any loss detected by the kernel facilities
+          available on this device, or for discarded, throttled, overflowed, or
+          malformed records.</p>
+        </section>
+        """
+
     generated = time_label(capture)
     document = f"""<!doctype html>
 <html lang="en">
@@ -1485,6 +1648,8 @@ def build_report(
     <p class="chart-note">Circles are minor; diamonds are major. Filter by mapping
     type and hover for attribution. Virtual addresses can move between runs (ASLR).</p>
   </section>
+
+  {native_callchain_html}
 
   <section>
     <h2>Where startup faults came from</h2>

@@ -250,6 +250,43 @@ class BundleAttributionTests(unittest.TestCase):
         self.assertTrue(events[1]["faulting_binary_is_bundle_owned"])
         self.assertEqual("Feature.load", events[0]["first_app_frame"])
 
+    def test_physical_inference_ignores_unrelated_app_until_main_executable(self):
+        root = "/private/var/containers/Bundle/Application/UUID/Example.app"
+        rows = [
+            xml_row(
+                time=100,
+                operation="File Backed Page In",
+                binary="Other",
+                binary_path="/private/var/containers/Bundle/Application/OTHER/Other.app/Other",
+                frame="Other.start",
+                address=0x1000,
+            ),
+            xml_row(
+                time=110,
+                operation="Page Cache Hit",
+                binary="Example",
+                binary_path=f"{root}/Example",
+                frame="App.start",
+                address=0x2000,
+            ),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            xml = Path(directory) / "virtual-memory.xml"
+            xml.write_text("<trace>" + "".join(rows) + "</trace>")
+            events = parser.parse_events(xml, 42, "Example")
+
+        self.assertFalse(events[0]["faulting_binary_is_bundle_owned"])
+        self.assertTrue(events[1]["faulting_binary_is_bundle_owned"])
+
+    def test_bundle_ownership_normalizes_parent_components(self):
+        root = "/private/Containers/Example.app"
+        self.assertFalse(
+            parser._path_is_within_bundle(
+                f"{root}/../Other.app/Frameworks/Feature",
+                root,
+            )
+        )
+
 
 class InstrumentsLifecycleTests(unittest.TestCase):
     def test_start_recording_uses_one_shot_listener_and_named_option(self):

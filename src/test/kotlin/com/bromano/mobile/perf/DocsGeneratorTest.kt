@@ -101,7 +101,10 @@ class DocsGeneratorTest {
         assertContains(md, "## faults")
         assertContains(md, "| android | Collect exact Android startup faults and generate an interactive HTML report |")
         assertContains(md, "| ios | Collect iOS startup VM faults and stacks with Instruments")
-        assertContains(md, "| --max-resident-pages | int | Maximum verified resident app-file pages allowed before launch |")
+        assertContains(
+            md,
+            "| --max-resident-pages | int | Maximum verified resident app-file pages allowed before launch (strict default: 0) |",
+        )
         assertContains(md, "| --reboot-before-collect |  | Reboot the target before cache eviction and collection |")
         assertContains(md, "| --overwrite |  | Replace a non-empty output owned by mperf faults |")
         assertContains(md, "| --cache-policy | text | Cache policy: auto, purge, pressure, reboot, or none |")

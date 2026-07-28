@@ -20,11 +20,12 @@ class IosFaultsCommand(
     private val shell: Shell,
     private val config: Config,
     engine: FaultEngine,
+    workflow: IosFaultWorkflow? = null,
 ) : CliktCommand("ios") {
     override fun help(context: Context) =
         "Collect iOS startup VM faults and stacks with Instruments and generate an interactive HTML report"
 
-    private val support = FaultCommandSupport(shell, engine)
+    private val workflow = workflow ?: DefaultIosFaultWorkflow(engine)
 
     private val bundleIdentifier by option("-b", "--bundle", help = "Bundle identifier")
     private val app by option("--app", help = "Built .app bundle to install before capture")
@@ -114,60 +115,30 @@ class IosFaultsCommand(
         }
         val finalDevice = device ?: config.ios?.deviceId ?: "booted"
         val finalOutput = (output ?: defaultFaultOutput("ios")).absoluteNormalized()
-        val engineDirectory = support.engineDirectory("ios")
-        val arguments =
-            buildList {
-                add("faults.py")
-                finalBundle?.let {
-                    add("--bundle-id")
-                    add(it)
-                }
-                app?.let {
-                    add("--app")
-                    add(it.absoluteNormalized().toString())
-                }
-                appBinaryName?.let {
-                    add("--app-binary-name")
-                    add(it)
-                }
-                add("--device")
-                add(finalDevice)
-                add("--output")
-                add(finalOutput.toString())
-                add("--cache-policy")
-                add(cachePolicy)
-                add("--residency-threshold")
-                add(residencyThreshold.toString())
-                add("--pressure-fraction")
-                add(pressureFraction.toString())
-                add("--pressure-hold-seconds")
-                add(pressureHoldSeconds.toString())
-                add("--settle-seconds")
-                add(settleSeconds.toString())
-                developmentTeam?.let {
-                    add("--development-team")
-                    add(it)
-                }
-                pressureMegabytes?.let {
-                    add("--pressure-megabytes")
-                    add(it.toString())
-                }
-                timeLimit?.let {
-                    add("--time-limit")
-                    add(it.toString())
-                }
-                appArguments.forEach {
-                    add("--app-argument")
-                    add(it)
-                }
-                if (requireColdCache) add("--require-cold-cache")
-                if (allowHostPressure) add("--allow-host-pressure")
-                if (allowUnconfirmedCache) add("--allow-unconfirmed-cache")
-                if (overwrite) add("--overwrite")
-                if (skipCollect) add("--skip-collect")
-            }
-        support.run(engineDirectory, arguments)
-        val report = finalOutput.resolve("report.html")
+        val report =
+            workflow.run(
+                IosFaultRequest(
+                    bundleIdentifier = finalBundle,
+                    app = app?.absoluteNormalized(),
+                    appBinaryName = appBinaryName,
+                    device = finalDevice,
+                    output = finalOutput,
+                    cachePolicy = cachePolicy,
+                    requireColdCache = requireColdCache,
+                    allowHostPressure = allowHostPressure,
+                    allowUnconfirmedCache = allowUnconfirmedCache,
+                    residencyThreshold = residencyThreshold,
+                    developmentTeam = developmentTeam,
+                    pressureFraction = pressureFraction,
+                    pressureMegabytes = pressureMegabytes,
+                    pressureHoldSeconds = pressureHoldSeconds,
+                    settleSeconds = settleSeconds,
+                    timeLimit = timeLimit,
+                    appArguments = appArguments,
+                    overwrite = overwrite,
+                    skipCollect = skipCollect,
+                ),
+            )
         echo("iOS fault report: $report")
         if (openReport) shell.open(report.toUri().toString())
     }

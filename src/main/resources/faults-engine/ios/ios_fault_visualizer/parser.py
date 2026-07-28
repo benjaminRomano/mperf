@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import pickle
+import posixpath
 import sqlite3
 import tempfile
 import xml.etree.ElementTree as ET
@@ -243,6 +244,8 @@ def _first_frame(
 def _path_is_within_bundle(binary_path: str, app_bundle_root: str) -> bool:
     if not binary_path or not app_bundle_root:
         return False
+    binary_path = posixpath.normpath(binary_path)
+    app_bundle_root = posixpath.normpath(app_bundle_root)
     try:
         PurePosixPath(binary_path).relative_to(PurePosixPath(app_bundle_root))
         return True
@@ -252,12 +255,22 @@ def _path_is_within_bundle(binary_path: str, app_bundle_root: str) -> bool:
 
 def _infer_bundle_root(
     frames: Iterable[dict[str, Any]],
+    process_name: str,
+    app_binary_name: str,
 ) -> str:
+    candidates = {name for name in (process_name, app_binary_name) if name}
     for frame in frames:
         binary = frame.get("binary") or {}
-        path = PurePosixPath(str(binary.get("path") or ""))
+        binary_name = str(binary.get("name") or "")
+        if binary_name not in candidates:
+            continue
+        path = PurePosixPath(posixpath.normpath(str(binary.get("path") or "")))
         for index, part in enumerate(path.parts):
-            if part.endswith(".app"):
+            if (
+                part.endswith(".app")
+                and index + 1 == len(path.parts) - 1
+                and path.parts[-1] == binary_name
+            ):
                 return str(PurePosixPath(*path.parts[: index + 1]))
     return ""
 
@@ -317,6 +330,8 @@ def parse_events(
         if not resolved_bundle_root:
             resolved_bundle_root = _infer_bundle_root(
                 frames,
+                process_name,
+                app_binary_name,
             )
         faulting = frames[0] if frames else {}
         symbolicated = _first_frame(
@@ -370,6 +385,7 @@ def parse_events(
             "first_app_source_line": app_source.get("line", 0),
             "stack_depth": len(frames),
             "stack": " ← ".join(_frame_label(frame) for frame in frames),
+            "_frames": frames,
         }
         events.append(event)
         element.clear()
@@ -380,6 +396,23 @@ def parse_events(
                 str(event.get("faulting_binary_path") or ""),
                 resolved_bundle_root,
             )
+            app_frame = _first_frame(
+                event["_frames"],
+                lambda frame: _is_app_frame(
+                    frame,
+                    str(event.get("process_name") or ""),
+                    app_binary_name,
+                    resolved_bundle_root,
+                ),
+            )
+            app_binary = app_frame.get("binary") or {}
+            app_source = app_frame.get("source") or {}
+            event["first_app_frame"] = app_frame.get("name", "")
+            event["first_app_binary"] = app_binary.get("name", "")
+            event["first_app_source_path"] = app_source.get("path", "")
+            event["first_app_source_line"] = app_source.get("line", 0)
+    for event in events:
+        event.pop("_frames", None)
     registry.close()
     events.sort(key=lambda event: event["trace_start_ns"])
     if not events:

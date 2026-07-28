@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class IosFaultsCommandTest {
@@ -17,19 +18,12 @@ class IosFaultsCommandTest {
 
     @Test
     fun `runs simulator capture with auditable cache controls`() {
-        val shell = FakeShell()
+        val workflow = RecordingIosFaultWorkflow()
         val output = temporaryDirectory.resolve("capture")
         val command =
-            IosFaultsCommand(
-                shell,
-                Config(
-                    ios =
-                        IosConfig(
-                            bundleIdentifier = "com.example.app",
-                            deviceId = "SIMULATOR-UDID",
-                        ),
-                ),
-                FixedIosFaultEngine(temporaryDirectory.resolve("engine")),
+            command(
+                Config(ios = IosConfig(bundleIdentifier = "com.example.app", deviceId = "SIMULATOR-UDID")),
+                workflow,
             )
 
         val result =
@@ -39,28 +33,21 @@ class IosFaultsCommandTest {
             )
 
         assertEquals(0, result.statusCode, result.output)
-        assertEquals("uv --version", shell.runCommandCalls[0])
-        val capture = shell.runCommandCalls[1]
-        assertTrue(capture.contains("'faults.py'"))
-        assertTrue(capture.contains("'--bundle-id' 'com.example.app'"))
-        assertTrue(capture.contains("'--device' 'SIMULATOR-UDID'"))
-        assertTrue(capture.contains("'--cache-policy' 'auto'"))
-        assertTrue(capture.contains("'--require-cold-cache'"))
-        assertTrue(capture.contains("'--allow-host-pressure'"))
-        assertTrue(capture.contains("'--residency-threshold' '0.02'"))
-        assertTrue(capture.contains("'--settle-seconds' '2.5'"))
+        val request = workflow.requests.single()
+        assertEquals("com.example.app", request.bundleIdentifier)
+        assertEquals("SIMULATOR-UDID", request.device)
+        assertEquals("auto", request.cachePolicy)
+        assertTrue(request.requireColdCache)
+        assertTrue(request.allowHostPressure)
+        assertEquals(0.02, request.residencyThreshold)
+        assertEquals(2.5, request.settleSeconds)
     }
 
     @Test
     fun `requires bundle or installable app`() {
-        val command =
-            IosFaultsCommand(
-                FakeShell(),
-                Config(ios = null),
-                FixedIosFaultEngine(temporaryDirectory.resolve("engine")),
-            )
-
-        val result = command.test("--out ${temporaryDirectory.resolve("capture")} --no-open")
+        val result =
+            command(Config(ios = null), RecordingIosFaultWorkflow())
+                .test("--out ${temporaryDirectory.resolve("capture")} --no-open")
 
         assertEquals(1, result.statusCode)
         assertTrue(result.output.contains("Bundle identifier must be provided"))
@@ -68,128 +55,109 @@ class IosFaultsCommandTest {
 
     @Test
     fun `reprocesses a portable saved capture without bundle identity`() {
-        val shell = FakeShell()
+        val workflow = RecordingIosFaultWorkflow()
         val output = temporaryDirectory.resolve("capture")
-        val command =
-            IosFaultsCommand(
-                shell,
-                Config(ios = null),
-                FixedIosFaultEngine(temporaryDirectory.resolve("engine")),
-            )
-
-        val result = command.test("--out $output --skip-collect --no-open")
+        val result = command(Config(ios = null), workflow).test("--out $output --skip-collect --no-open")
 
         assertEquals(0, result.statusCode, result.output)
-        assertTrue(shell.runCommandCalls[1].contains("'--skip-collect'"))
-        assertTrue(!shell.runCommandCalls[1].contains("'--bundle-id'"))
-        assertTrue(!shell.runCommandCalls[1].contains("'--app'"))
+        val request = workflow.requests.single()
+        assertTrue(request.skipCollect)
+        assertEquals(null, request.bundleIdentifier)
+        assertEquals(null, request.app)
     }
 
     @Test
     fun `rejects contradictory strict and unconfirmed cache flags`() {
-        val shell = FakeShell()
-        val command =
-            IosFaultsCommand(
-                shell,
-                Config(ios = IosConfig(bundleIdentifier = "com.example.app")),
-                FixedIosFaultEngine(temporaryDirectory.resolve("engine")),
-            )
-
+        val workflow = RecordingIosFaultWorkflow()
         val result =
-            command.test(
-                "--out ${temporaryDirectory.resolve("capture")} " +
-                    "--require-cold-cache --allow-unconfirmed-cache --no-open",
-            )
+            command(Config(ios = IosConfig(bundleIdentifier = "com.example.app")), workflow)
+                .test(
+                    "--out ${temporaryDirectory.resolve("capture")} " +
+                        "--require-cold-cache --allow-unconfirmed-cache --no-open",
+                )
 
         assertEquals(1, result.statusCode)
         assertTrue(result.output.contains("cannot be combined"))
-        assertTrue(shell.runCommandCalls.isEmpty())
+        assertTrue(workflow.requests.isEmpty())
     }
 
     @Test
     fun `explicit app does not inherit configured bundle`() {
-        val shell = FakeShell()
-        val app = temporaryDirectory.resolve("Different.app").toFile()
-        app.mkdirs()
-        val command =
-            IosFaultsCommand(
-                shell,
-                Config(ios = IosConfig(bundleIdentifier = "com.stale.config")),
-                FixedIosFaultEngine(temporaryDirectory.resolve("engine")),
-            )
-
+        val app =
+            temporaryDirectory
+                .resolve("Different.app")
+                .toFile()
+                .also { it.mkdirs() }
+                .toPath()
+        val workflow = RecordingIosFaultWorkflow()
         val result =
-            command.test(
-                "--app ${app.toPath()} --out ${temporaryDirectory.resolve("capture")} --no-open",
-            )
+            command(Config(ios = IosConfig(bundleIdentifier = "com.stale.config")), workflow)
+                .test("--app $app --out ${temporaryDirectory.resolve("capture")} --no-open")
 
         assertEquals(0, result.statusCode, result.output)
-        val capture = shell.runCommandCalls[1]
-        assertTrue(capture.contains("'--app' '${app.toPath().toAbsolutePath()}'"))
-        assertTrue(!capture.contains("'--bundle-id'"))
-        assertTrue(!capture.contains("com.stale.config"))
+        val request = workflow.requests.single()
+        assertEquals(null, request.bundleIdentifier)
+        assertEquals(app.toAbsolutePath(), request.app)
     }
 
     @Test
-    fun `explicit bundle still overrides configured bundle`() {
-        val shell = FakeShell()
-        val command =
-            IosFaultsCommand(
-                shell,
-                Config(ios = IosConfig(bundleIdentifier = "com.stale.config")),
-                FixedIosFaultEngine(temporaryDirectory.resolve("engine")),
-            )
-
+    fun `explicit bundle overrides configured bundle`() {
+        val workflow = RecordingIosFaultWorkflow()
         val result =
-            command.test(
-                "--bundle com.explicit.app --out ${temporaryDirectory.resolve("capture")} --no-open",
-            )
+            command(Config(ios = IosConfig(bundleIdentifier = "com.stale.config")), workflow)
+                .test("--bundle com.explicit.app --out ${temporaryDirectory.resolve("capture")} --no-open")
 
         assertEquals(0, result.statusCode, result.output)
-        val capture = shell.runCommandCalls[1]
-        assertTrue(capture.contains("'--bundle-id' 'com.explicit.app'"))
-        assertTrue(!capture.contains("com.stale.config"))
+        assertEquals("com.explicit.app", workflow.requests.single().bundleIdentifier)
     }
 
     @Test
     fun `recording window must cover settle window`() {
-        val shell = FakeShell()
-        val command =
-            IosFaultsCommand(
-                shell,
-                Config(ios = IosConfig(bundleIdentifier = "com.example.app")),
-                FixedIosFaultEngine(temporaryDirectory.resolve("engine")),
-            )
-
+        val workflow = RecordingIosFaultWorkflow()
         val result =
-            command.test(
-                "--settle-seconds 2.1 --time-limit 2 " +
-                    "--out ${temporaryDirectory.resolve("capture")} --no-open",
-            )
+            command(Config(ios = IosConfig(bundleIdentifier = "com.example.app")), workflow)
+                .test(
+                    "--settle-seconds 2.1 --time-limit 2 " +
+                        "--out ${temporaryDirectory.resolve("capture")} --no-open",
+                )
 
         assertEquals(1, result.statusCode)
         assertTrue(result.output.contains("must be at least"))
-        assertTrue(shell.runCommandCalls.isEmpty())
+        assertTrue(workflow.requests.isEmpty())
     }
 
     @Test
     fun `recording window accepts ceiling of settle window`() {
-        val shell = FakeShell()
-        val command =
-            IosFaultsCommand(
-                shell,
-                Config(ios = IosConfig(bundleIdentifier = "com.example.app")),
-                FixedIosFaultEngine(temporaryDirectory.resolve("engine")),
-            )
-
+        val workflow = RecordingIosFaultWorkflow()
         val result =
-            command.test(
-                "--settle-seconds 2.1 --time-limit 3 " +
-                    "--out ${temporaryDirectory.resolve("capture")} --no-open",
-            )
+            command(Config(ios = IosConfig(bundleIdentifier = "com.example.app")), workflow)
+                .test(
+                    "--settle-seconds 2.1 --time-limit 3 " +
+                        "--out ${temporaryDirectory.resolve("capture")} --no-open",
+                )
 
         assertEquals(0, result.statusCode, result.output)
-        assertTrue(shell.runCommandCalls[1].contains("'--time-limit' '3'"))
+        assertEquals(3, workflow.requests.single().timeLimit)
+        assertFalse(workflow.requests.single().skipCollect)
+    }
+
+    private fun command(
+        config: Config,
+        workflow: IosFaultWorkflow,
+    ) = IosFaultsCommand(
+        FakeShell(),
+        config,
+        FixedIosFaultEngine(temporaryDirectory.resolve("engine")),
+        workflow,
+    )
+}
+
+private class RecordingIosFaultWorkflow : IosFaultWorkflow {
+    val requests = mutableListOf<IosFaultRequest>()
+
+    override fun run(request: IosFaultRequest): Path {
+        requests += request
+        return request.output.resolve("report.html")
     }
 }
 

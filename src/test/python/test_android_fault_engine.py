@@ -1,4 +1,6 @@
+import csv
 import importlib.util
+import json
 import subprocess
 import struct
 import sys
@@ -195,6 +197,7 @@ class VdexReportTests(unittest.TestCase):
             page_cache=pd.DataFrame(),
             residency=pd.DataFrame(),
             vdex_boundaries=boundaries,
+            callchains=pd.DataFrame(),
         )
 
     def test_default_vdex_view_keeps_the_complete_file(self):
@@ -222,6 +225,215 @@ class CaptureMetadataTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "predates"):
                     faults.process_capture(root)
             query.assert_not_called()
+
+    def test_failed_collector_capture_cannot_be_reprocessed_or_reported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "capture_metadata.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 5,
+                        "capture_status": "collector_integrity_failed",
+                        "collector_lost": 1,
+                    }
+                )
+            )
+            with self.assertRaisesRegex(RuntimeError, "incomplete"):
+                faults.process_capture(root)
+            with self.assertRaisesRegex(RuntimeError, "incomplete"):
+                report.read_capture(root)
+
+
+class FaultCallchainTests(unittest.TestCase):
+    def fault(self):
+        return {
+            "sequence": 7,
+            "ts": 123456,
+            "elapsed_ms": 4.5,
+            "event_type": "minor",
+            "is_major": False,
+            "tid": 42,
+            "address": 0x4000,
+            "file_name": "/data/app/com.example.app/base.apk",
+            "offset": 4096,
+        }
+
+    def write_rows(self, root: Path, rows: list[tuple[int, int, int]]):
+        fields = [
+            "fault_index",
+            "timestamp_ns",
+            "event_type",
+            "pid",
+            "tid",
+            "address",
+            "frame_index",
+            "ip",
+        ]
+        with (root / "fault_callchains.csv").open("w", newline="") as file:
+            writer = csv.DictWriter(file, fieldnames=fields)
+            writer.writeheader()
+            for fault_index, pid, ip in rows:
+                writer.writerow(
+                    {
+                        "fault_index": fault_index,
+                        "timestamp_ns": 123456,
+                        "event_type": "minor",
+                        "pid": pid,
+                        "tid": 42,
+                        "address": "0x4000",
+                        "frame_index": 0,
+                        "ip": f"0x{ip:x}",
+                    }
+                )
+
+    def test_exact_pid_context_zero_and_repeated_frames(self):
+        user_context = next(
+            marker
+            for marker, name in faults.PERF_CONTEXT_NAMES.items()
+            if name == "user"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rows = [
+                (1, 999, user_context),
+                (1, 999, 0x1FFF),
+                (2, 123, user_context),
+                (2, 123, 0x1100),
+                (2, 123, 0x1100),
+                (2, 123, 0x1200),
+                (2, 123, 0),
+            ]
+            self.write_rows(root, rows)
+            map_entries = faults.parse_maps_text(
+                "1000-2000 r-xp 00000000 00:00 0 "
+                "/data/app/~~hash/com.example.app-random/libfixture.so"
+            )
+            result = faults.write_fault_callchains(
+                root,
+                123,
+                "arm64-v8a",
+                [self.fault()],
+                map_entries,
+                [],
+            )
+            resolved = pd.read_csv(root / "resolved_fault_callchains.csv")
+
+        self.assertEqual(1, result["faults_with_callchains"])
+        self.assertEqual([0x1100, 0x10FE, 0x11FE], resolved["ip"].tolist())
+        self.assertEqual([0x1100, 0x1100, 0x1200], resolved["raw_ip"].tolist())
+        self.assertNotIn(0, resolved["ip"].tolist())
+        self.assertEqual(
+            ["/data/app/~~hash/com.example.app-random/libfixture.so"] * 3,
+            resolved["file_name"].tolist(),
+        )
+
+        capture = report.Capture(
+            path=Path("capture"),
+            label="capture",
+            metadata={"page_size": 4096, "package": "com.example.app"},
+            all_faults=pd.DataFrame(),
+            mapped_faults=pd.DataFrame(),
+            page_cache=pd.DataFrame(),
+            residency=pd.DataFrame(),
+            vdex_boundaries=pd.DataFrame(),
+            callchains=resolved,
+        )
+        figure = report.native_callchain_figure(capture)
+        self.assertEqual([0, 1, 2], list(figure.data[0].y))
+        self.assertEqual(
+            ["libfixture.so+0x1fe", "libfixture.so+0xfe", "libfixture.so+0x100"],
+            [row[0][0] for row in figure.data[0].customdata],
+        )
+        self.assertEqual([0, 0, 0], [row[0] for row in figure.data[0].z])
+        self.assertNotEqual(
+            0,
+            report.native_callchain_category(
+                "/data/app/~~hash/com.example.application-random/libother.so",
+                "com.example.app",
+            ),
+        )
+
+    def test_missing_exact_target_chain_is_a_hard_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_rows(root, [(1, 999, 0x1100)])
+            with self.assertRaisesRegex(RuntimeError, "Missing exact native callchain"):
+                faults.write_fault_callchains(
+                    root,
+                    123,
+                    "arm64-v8a",
+                    [self.fault()],
+                    [],
+                    [],
+                )
+
+    def test_anonymous_executable_mapping_does_not_abort_processing(self):
+        user_context = next(
+            marker
+            for marker, name in faults.PERF_CONTEXT_NAMES.items()
+            if name == "user"
+        )
+        anonymous = faults.MapEntry(
+            begin_address=0x1000,
+            end_address=0x2000,
+            permissions="r-xp",
+            file_offset=0,
+            device=0,
+            inode=0,
+            file_name=None,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_rows(root, [(1, 123, user_context), (1, 123, 0x1100)])
+            result = faults.write_fault_callchains(
+                root,
+                123,
+                "arm64-v8a",
+                [self.fault()],
+                [anonymous],
+                [],
+            )
+        self.assertEqual(0, result["resolved_user_frames"])
+        self.assertEqual(1, result["unresolved_user_frames"])
+
+    def test_arm64_caller_return_address_is_adjusted_before_mapping_lookup(self):
+        user_context = next(
+            marker
+            for marker, name in faults.PERF_CONTEXT_NAMES.items()
+            if name == "user"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_rows(
+                root,
+                [
+                    (1, 123, user_context),
+                    (1, 123, 0xB400000000001100),
+                    (1, 123, 0xB400000000002000),
+                ],
+            )
+            mappings = faults.parse_maps_text(
+                "\n".join(
+                    [
+                        "1000-2000 r-xp 00000000 00:00 0 /data/app/first.so",
+                        "2000-3000 r-xp 00000000 00:00 0 /system/lib64/second.so",
+                    ]
+                )
+            )
+            faults.write_fault_callchains(
+                root,
+                123,
+                "arm64-v8a",
+                [self.fault()],
+                mappings,
+                [],
+            )
+            resolved = pd.read_csv(root / "resolved_fault_callchains.csv")
+
+        caller = resolved.iloc[1]
+        self.assertEqual(0xB400000000002000, caller["raw_ip"])
+        self.assertEqual(0x1FFE, caller["ip"])
+        self.assertEqual("/data/app/first.so", caller["file_name"])
 
 
 class CacheAttributionTests(unittest.TestCase):

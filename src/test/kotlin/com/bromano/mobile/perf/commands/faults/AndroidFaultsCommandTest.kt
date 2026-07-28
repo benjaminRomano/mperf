@@ -20,33 +20,31 @@ class AndroidFaultsCommandTest {
         val shell = FakeShell()
         val engineRoot = temporaryDirectory.resolve("engine")
         val output = temporaryDirectory.resolve("capture")
+        val workflow = RecordingAndroidFaultWorkflow()
         val command =
             AndroidFaultsCommand(
                 shell,
                 Config(android = AndroidConfig(packageName = "com.example.app")),
                 FixedFaultEngine(engineRoot),
+                workflow,
             )
 
         val result =
             command.test(
                 "--device emulator-5554 --out $output --reboot-before-collect " +
-                    "--max-resident-pages 0 --settle-ms 900 --overwrite --no-open",
+                    "--max-resident-pages 0 --settle-ms 900 --native-stacks --overwrite --no-open",
             )
 
         assertEquals(0, result.statusCode, result.output)
-        assertEquals("uv --version", shell.runCommandCalls[0])
-        val capture = shell.runCommandCalls[1]
-        assertTrue(capture.contains("'faults.py'"))
-        assertTrue(capture.contains("'--package' 'com.example.app'"))
-        assertTrue(capture.contains("'--serial' 'emulator-5554'"))
-        assertTrue(capture.contains("'--reboot-before-collect'"))
-        assertTrue(capture.contains("'--max-resident-pages' '0'"))
-        assertTrue(capture.contains("'--settle-ms' '900'"))
-        assertTrue(capture.contains("'--pull-apks'"))
-        assertTrue(capture.contains("'--overwrite'"))
-        val report = shell.runCommandCalls[2]
-        assertTrue(report.contains("'report.py'"))
-        assertTrue(report.contains("'${output.resolve("report.html")}'"))
+        val request = workflow.requests.single()
+        assertEquals("com.example.app", request.packageName)
+        assertEquals("emulator-5554", request.device)
+        assertTrue(request.rebootBeforeCollect)
+        assertEquals(0, request.maxResidentPages)
+        assertEquals(900, request.settleMs)
+        assertTrue(request.pullArtifacts)
+        assertTrue(request.nativeStacks)
+        assertTrue(request.overwrite)
     }
 
     @Test
@@ -55,11 +53,13 @@ class AndroidFaultsCommandTest {
         val engineRoot = temporaryDirectory.resolve("engine")
         val output = temporaryDirectory.resolve("capture").also { it.toFile().mkdirs() }
         val comparison = temporaryDirectory.resolve("comparison").also { it.toFile().mkdirs() }
+        val workflow = RecordingAndroidFaultWorkflow()
         val command =
             AndroidFaultsCommand(
                 shell,
                 Config(android = null),
                 FixedFaultEngine(engineRoot),
+                workflow,
             )
 
         val result =
@@ -69,12 +69,13 @@ class AndroidFaultsCommandTest {
             )
 
         assertEquals(0, result.statusCode, result.output)
-        assertTrue(shell.runCommandCalls[1].contains("'--skip-collect'"))
-        assertTrue(!shell.runCommandCalls[1].contains("'--package'"))
-        assertTrue(shell.runCommandCalls[1].contains("'--no-pull-apks'"))
-        assertTrue(shell.runCommandCalls[2].contains("'--compare' '${comparison.toAbsolutePath()}'"))
-        assertTrue(shell.runCommandCalls[2].contains("'--compare-label' 'reordered'"))
-        assertTrue(shell.runCommandCalls[2].contains("'--allow-incomparable'"))
+        val request = workflow.requests.single()
+        assertTrue(request.skipCollect)
+        assertEquals(null, request.packageName)
+        assertTrue(!request.pullArtifacts)
+        assertEquals(comparison.toAbsolutePath(), request.comparison)
+        assertEquals("reordered", request.comparisonLabel)
+        assertTrue(request.allowIncomparable)
     }
 
     @Test
@@ -95,11 +96,13 @@ class AndroidFaultsCommandTest {
     @Test
     fun `saved capture identity overrides configured package`() {
         val shell = FakeShell()
+        val workflow = RecordingAndroidFaultWorkflow()
         val command =
             AndroidFaultsCommand(
                 shell,
                 Config(android = AndroidConfig(packageName = "com.stale.config")),
                 FixedFaultEngine(temporaryDirectory.resolve("engine")),
+                workflow,
             )
 
         val result =
@@ -108,8 +111,16 @@ class AndroidFaultsCommandTest {
             )
 
         assertEquals(0, result.statusCode, result.output)
-        assertTrue(!shell.runCommandCalls[1].contains("'--package'"))
-        assertTrue(!shell.runCommandCalls[1].contains("com.stale.config"))
+        assertEquals(null, workflow.requests.single().packageName)
+    }
+}
+
+private class RecordingAndroidFaultWorkflow : AndroidFaultWorkflow {
+    val requests = mutableListOf<AndroidFaultRequest>()
+
+    override fun run(request: AndroidFaultRequest): Path {
+        requests += request
+        return request.output.resolve("report.html")
     }
 }
 

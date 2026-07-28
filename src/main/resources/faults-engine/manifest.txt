@@ -13,6 +13,7 @@ ios/cache-pressure/CachePressure.xcodeproj/xcshareddata/xcschemes/CachePressure.
 ios/cache-pressure/CachePressure/CachePressureApp.swift
 ios/cache-pressure/CachePressure/Info.plist
 ios/faults.py
+ios/native/residency.c
 ios/ios_fault_visualizer/__init__.py
 ios/ios_fault_visualizer/assets/plotly.min.js
 ios/ios_fault_visualizer/cache.py

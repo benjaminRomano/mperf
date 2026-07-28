@@ -37,8 +37,9 @@
 | --device, -d | text | ADB device serial |
 | --out, -o | path | Capture output directory |
 | --settle-ms | int | Collection time after startup completes |
-| --max-resident-pages | int | Maximum verified resident app-file pages allowed before launch |
+| --max-resident-pages | int | Maximum verified resident app-file pages allowed before launch (strict default: 0) |
 | --reboot-before-collect |  | Reboot the target before cache eviction and collection |
+| --native-stacks |  | Capture exact native/ART frame-pointer callchains with each fault |
 | --no-pull-artifacts, --pull-artifacts |  | Pull APK and ART files for section attribution |
 | --skip-collect |  | Reprocess and report an existing exact capture |
 | --overwrite |  | Replace a non-empty output owned by mperf faults |
