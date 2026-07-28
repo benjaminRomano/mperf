@@ -67,6 +67,15 @@ class MappingEvent:
     mapping: MapEntry
 
 
+@dataclass(frozen=True)
+class VdexAnalysis:
+    format_version: str
+    stored_checksums: tuple[int, ...]
+    dex_ranges: tuple[ZipEntry, ...]
+    identities_verified: bool
+    verification_note: str
+
+
 class Adb:
     def __init__(self, serial: Optional[str] = None):
         self.serial = self._resolve_serial(serial)
@@ -191,6 +200,12 @@ class Adb:
 
 def sql_string(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
+
+
+def is_app_owned_path(file_name: str, package: str) -> bool:
+    """Match an exact package path segment or hashed /data/app install segment."""
+    escaped = re.escape(package)
+    return re.search(rf"(?:^|/){escaped}(?:/|-[^/]+(?:/|$)|$)", file_name) is not None
 
 
 def linux_device_number(device: str) -> int:
@@ -343,57 +358,34 @@ def read_zip_entries(path: Path) -> list[ZipEntry]:
     return sorted(entries, key=lambda entry: entry.data_offset)
 
 
-def read_android10_vdex_entries(
-    path: Path,
-    apk_dex_identities: Optional[list[tuple[str, int]]] = None,
+def _verified_vdex_names(
+    stored_checksums: list[int],
+    apk_dex_identities: Optional[list[tuple[str, int]]],
+) -> list[str]:
+    if apk_dex_identities is None:
+        return []
+    apk_checksums = [checksum for _, checksum in apk_dex_identities]
+    if len(apk_checksums) != len(stored_checksums):
+        return []
+    if apk_checksums != stored_checksums:
+        return []
+    return [name for name, _ in apk_dex_identities]
+
+
+def _read_vdex_dex_ranges(
+    data: bytes,
+    dex_begin: int,
+    dex_end: int,
+    number_of_dex_files: int,
+    verified_names: list[str],
+    *,
+    quickening_prefix_size: int,
+    compression_prefix: str,
 ) -> list[ZipEntry]:
-    """Return unambiguous DEX ranges for Android 10 VDEX 021/002 files.
-
-    CompactDex keeps a distinct header/table payload for each input dex, but
-    may deduplicate data into one shared region. The shared region is therefore
-    labeled separately instead of being assigned to an arbitrary dex. Unknown
-    VDEX revisions return no ranges rather than guessing their layout.
-    """
-    data = path.read_bytes()
-    header_size = 28
-    if (
-        len(data) < header_size
-        or data[:4] != b"vdex"
-        or data[4:8] != b"021\0"
-        or data[8:12] != b"002\0"
-    ):
-        return []
-
-    number_of_dex_files, _, _, _ = struct.unpack_from("<4I", data, 12)
-    if number_of_dex_files == 0 or number_of_dex_files > 10_000:
-        return []
-    if header_size + 4 * number_of_dex_files > len(data):
-        return []
-    vdex_checksums = list(
-        struct.unpack_from(f"<{number_of_dex_files}I", data, header_size)
-    )
-    verified_dex_names: list[str] = []
-    if apk_dex_identities is not None and (
-        len(apk_dex_identities) == number_of_dex_files
-        and [checksum for _, checksum in apk_dex_identities] == vdex_checksums
-    ):
-        verified_dex_names = [name for name, _ in apk_dex_identities]
-    dex_section_header_offset = header_size + 4 * number_of_dex_files
-    if dex_section_header_offset + 12 > len(data):
-        return []
-    dex_size, dex_shared_data_size, _ = struct.unpack_from(
-        "<3I", data, dex_section_header_offset
-    )
-    dex_begin = dex_section_header_offset + 12
-    dex_end = dex_begin + dex_size
-    shared_end = dex_end + dex_shared_data_size
-    if dex_end > len(data) or shared_end > len(data):
-        return []
-
     entries: list[ZipEntry] = []
     cursor = dex_begin
     for index in range(number_of_dex_files):
-        dex_start = cursor + 4  # Per-dex quickening-table offset.
+        dex_start = cursor + quickening_prefix_size
         if dex_start + 36 > dex_end:
             return []
         magic = data[dex_start : dex_start + 4]
@@ -403,12 +395,8 @@ def read_android10_vdex_entries(
         dex_payload_end = dex_start + file_size
         if file_size < 112 or dex_payload_end > dex_end:
             return []
-        verified_name = (
-            verified_dex_names[index] if index < len(verified_dex_names) else None
-        )
-        section_name = f"dex #{index + 1}"
-        if verified_name:
-            section_name += f" · {verified_name}"
+        verified_name = verified_names[index] if index < len(verified_names) else None
+        section_name = verified_name or f"dex #{index + 1} (identity unverified)"
         entries.append(
             ZipEntry(
                 file_name=section_name,
@@ -417,31 +405,159 @@ def read_android10_vdex_entries(
                 data_end=dex_payload_end,
                 compressed_size=file_size,
                 uncompressed_size=file_size,
-                compression="vdex-compact" if magic == b"cdex" else "vdex-standard",
+                compression=(
+                    f"{compression_prefix}-compact"
+                    if magic == b"cdex"
+                    else f"{compression_prefix}-standard"
+                ),
             )
         )
         cursor = (dex_payload_end + 3) & ~3
+    return entries if cursor == dex_end else []
 
-    if cursor != dex_end:
-        return []
-    if dex_shared_data_size:
-        shared_name = (
-            f"{entries[0].file_name} shared data"
-            if number_of_dex_files == 1
-            else "shared CompactDex data"
+
+def _read_android10_vdex(
+    path: Path,
+    apk_dex_identities: Optional[list[tuple[str, int]]] = None,
+) -> Optional[VdexAnalysis]:
+    data = path.read_bytes()
+    header_size = 28
+    if (
+        len(data) < header_size
+        or data[:4] != b"vdex"
+        or data[4:8] != b"021\0"
+        or data[8:12] != b"002\0"
+    ):
+        return None
+
+    number_of_dex_files, _, _, _ = struct.unpack_from("<4I", data, 12)
+    if number_of_dex_files == 0 or number_of_dex_files > 10_000:
+        return None
+    if header_size + 4 * number_of_dex_files > len(data):
+        return None
+    vdex_checksums = list(
+        struct.unpack_from(f"<{number_of_dex_files}I", data, header_size)
+    )
+    verified_dex_names = _verified_vdex_names(vdex_checksums, apk_dex_identities)
+    dex_section_header_offset = header_size + 4 * number_of_dex_files
+    if dex_section_header_offset + 12 > len(data):
+        return None
+    dex_size, dex_shared_data_size, _ = struct.unpack_from(
+        "<3I", data, dex_section_header_offset
+    )
+    dex_begin = dex_section_header_offset + 12
+    dex_end = dex_begin + dex_size
+    shared_end = dex_end + dex_shared_data_size
+    if dex_end > len(data) or shared_end > len(data):
+        return None
+
+    entries = _read_vdex_dex_ranges(
+        data,
+        dex_begin,
+        dex_end,
+        number_of_dex_files,
+        verified_dex_names,
+        quickening_prefix_size=4,
+        compression_prefix="vdex-021",
+    )
+    if not entries and dex_size:
+        return None
+    verified = len(verified_dex_names) == number_of_dex_files
+    return VdexAnalysis(
+        format_version="021/002",
+        stored_checksums=tuple(vdex_checksums),
+        dex_ranges=tuple(entries),
+        identities_verified=verified,
+        verification_note=(
+            "All ART location checksums match the APK dex entries in order."
+            if verified
+            else "APK dex identity was not assigned because the complete ordered "
+            "checksum set did not match."
+        ),
+    )
+
+
+def _read_sectioned_vdex(
+    path: Path,
+    apk_dex_identities: Optional[list[tuple[str, int]]] = None,
+) -> Optional[VdexAnalysis]:
+    """Read ART's sectioned VDEX 027 format used by Android 12 through 16."""
+    data = path.read_bytes()
+    header_size = 12
+    if len(data) < header_size or data[:4] != b"vdex" or data[4:8] != b"027\0":
+        return None
+    number_of_sections = struct.unpack_from("<I", data, 8)[0]
+    if number_of_sections < 3 or number_of_sections > 64:
+        return None
+    section_table_end = header_size + number_of_sections * 12
+    if section_table_end > len(data):
+        return None
+
+    sections: dict[int, tuple[int, int]] = {}
+    occupied: list[tuple[int, int]] = []
+    for index in range(number_of_sections):
+        kind, offset, size = struct.unpack_from("<3I", data, header_size + index * 12)
+        if kind in sections or offset > len(data) or size > len(data) - offset:
+            return None
+        if size and offset < section_table_end:
+            return None
+        sections[kind] = (offset, size)
+        if size:
+            occupied.append((offset, offset + size))
+    occupied.sort()
+    if any(left[1] > right[0] for left, right in zip(occupied, occupied[1:])):
+        return None
+
+    checksum_section = sections.get(0)
+    dex_section = sections.get(1)
+    verifier_section = sections.get(2)
+    if checksum_section is None or dex_section is None or verifier_section is None:
+        return None
+    checksum_offset, checksum_size = checksum_section
+    if checksum_size % 4:
+        return None
+    number_of_dex_files = checksum_size // 4
+    stored_checksums = list(
+        struct.unpack_from(f"<{number_of_dex_files}I", data, checksum_offset)
+    )
+    verified_names = _verified_vdex_names(stored_checksums, apk_dex_identities)
+    dex_offset, dex_size = dex_section
+    entries: list[ZipEntry] = []
+    if dex_size:
+        entries = _read_vdex_dex_ranges(
+            data,
+            dex_offset,
+            dex_offset + dex_size,
+            number_of_dex_files,
+            verified_names,
+            quickening_prefix_size=0,
+            compression_prefix="vdex-027",
         )
-        entries.append(
-            ZipEntry(
-                file_name=shared_name,
-                header_offset=dex_end,
-                data_offset=dex_end,
-                data_end=shared_end,
-                compressed_size=dex_shared_data_size,
-                uncompressed_size=dex_shared_data_size,
-                compression="vdex-shared",
-            )
-        )
-    return entries
+        if len(entries) != number_of_dex_files:
+            return None
+    verified = number_of_dex_files > 0 and len(verified_names) == number_of_dex_files
+    return VdexAnalysis(
+        format_version="027",
+        stored_checksums=tuple(stored_checksums),
+        dex_ranges=tuple(entries),
+        identities_verified=verified,
+        verification_note=(
+            "All ART location checksums match the APK dex entries in order."
+            if verified
+            else "APK dex identity was not assigned because the complete ordered "
+            "checksum set did not match."
+        ),
+    )
+
+
+def read_vdex(
+    path: Path,
+    apk_dex_identities: Optional[list[tuple[str, int]]] = None,
+) -> Optional[VdexAnalysis]:
+    """Parse supported VDEX formats without guessing at unknown layouts."""
+    return _read_android10_vdex(path, apk_dex_identities) or _read_sectioned_vdex(
+        path, apk_dex_identities
+    )
 
 
 def read_apk_dex_identities(path: Path) -> list[tuple[str, int]]:
@@ -533,28 +649,62 @@ def query_thread_names(trace: Path, pid: int) -> dict[int, str]:
 
 
 def query_page_cache_events(
-    trace: Path, pid: int, startup_start: int, startup_end: int
+    trace: Path,
+    pid: int,
+    startup_start: int,
+    startup_end: int,
+    app_inode_keys: set[tuple[int, int]],
 ) -> list[dict[str, str]]:
+    inode_values = ",\n".join(
+        f"({device}, {inode})" for device, inode in sorted(app_inode_keys)
+    )
+    if not inode_values:
+        inode_values = "(-1, -1)"
     return run_trace_query(
         trace,
         f"""
+        WITH
+          app_inodes(sdev, inode) AS (
+            VALUES {inode_values}
+          ),
+          cache_events AS (
+            SELECT
+              ftrace_event.ts,
+              ftrace_event.utid,
+              EXTRACT_ARG(ftrace_event.arg_set_id, 's_dev') AS sdev,
+              EXTRACT_ARG(ftrace_event.arg_set_id, 'i_ino') AS inode,
+              EXTRACT_ARG(ftrace_event.arg_set_id, 'index') AS page_index,
+              COALESCE(EXTRACT_ARG(ftrace_event.arg_set_id, 'order'), 0)
+                AS page_order
+            FROM ftrace_event
+            WHERE ftrace_event.name = 'mm_filemap_add_to_page_cache'
+              AND ftrace_event.ts >= {startup_start}
+              AND ftrace_event.ts < {startup_end}
+          )
         SELECT
-          ftrace_event.ts,
-          process.name AS process_name,
-          thread.name AS thread_name,
-          thread.tid,
-          EXTRACT_ARG(ftrace_event.arg_set_id, 's_dev') AS sdev,
-          EXTRACT_ARG(ftrace_event.arg_set_id, 'i_ino') AS inode,
-          EXTRACT_ARG(ftrace_event.arg_set_id, 'index') AS page_index,
-          COALESCE(EXTRACT_ARG(ftrace_event.arg_set_id, 'order'), 0) AS page_order
-        FROM ftrace_event
-        JOIN thread USING (utid)
-        JOIN process USING (upid)
-        WHERE ftrace_event.name = 'mm_filemap_add_to_page_cache'
-          AND process.pid = {pid}
-          AND ftrace_event.ts >= {startup_start}
-          AND ftrace_event.ts < {startup_end}
-        ORDER BY ftrace_event.ts;
+          cache_events.ts,
+          COALESCE(process.name, '[kernel worker]') AS process_name,
+          CASE
+            WHEN thread.name IS NOT NULL THEN thread.name
+            WHEN process.pid IS NULL THEN '[kernel worker]'
+            ELSE '[unnamed thread]'
+          END AS thread_name,
+          COALESCE(thread.tid, 0) AS tid,
+          cache_events.sdev,
+          cache_events.inode,
+          cache_events.page_index,
+          cache_events.page_order
+        FROM cache_events
+        LEFT JOIN thread USING (utid)
+        LEFT JOIN process USING (upid)
+        WHERE process.pid = {pid}
+           OR EXISTS (
+             SELECT 1
+             FROM app_inodes
+             WHERE app_inodes.sdev = cache_events.sdev
+               AND app_inodes.inode = cache_events.inode
+           )
+        ORDER BY cache_events.ts;
         """,
     )
 
@@ -678,23 +828,32 @@ def package_paths(adb: Adb, package: str) -> list[str]:
 def package_files(adb: Adb, package: str, apk_paths: list[str]) -> list[str]:
     roots = sorted({str(Path(path).parent) for path in apk_paths})
     data_roots = [f"/data/user/0/{package}", f"/data/user_de/0/{package}"]
-    commands = []
+    commands = [
+        f"test -f {shlex.quote(path)} || "
+        f"{{ echo 'Installed APK disappeared: {shlex.quote(path)}' >&2; exit 74; }};"
+        for path in apk_paths
+    ]
     for root in [*roots, *data_roots]:
         commands.append(
             f"if [ -d {shlex.quote(root)} ]; then "
-            f"find {shlex.quote(root)} -type f -print0; fi;"
+            f"find {shlex.quote(root)} -type f -print0 2>/dev/null || true; fi;"
         )
     result = adb.root_shell(
         " ".join(commands), capture_output=True, text=True, check=True
     )
-    return sorted(set(filter(None, result.stdout.split("\0"))))
+    return sorted(set(apk_paths) | set(filter(None, result.stdout.split("\0"))))
 
 
 def cache_targets(files: Iterable[str]) -> list[str]:
     return sorted(set(filter(None, files)))
 
 
-def run_collector_file_command(adb: Adb, mode: str, files: list[str]) -> str:
+def run_collector_file_command(
+    adb: Adb,
+    mode: str,
+    files: list[str],
+    diagnostics: Optional[list[dict[str, object]]] = None,
+) -> str:
     if not files:
         return ""
     if mode not in ("--residency", "--evict"):
@@ -724,9 +883,18 @@ def run_collector_file_command(adb: Adb, mode: str, files: list[str]) -> str:
                 *(shlex.quote(file_name) for file_name in file_batch),
             ]
         )
-        stdout = adb.root_shell(
-            command, capture_output=True, text=True, check=True
-        ).stdout
+        result = adb.root_shell(command, capture_output=True, text=True)
+        if diagnostics is not None:
+            diagnostics.append(
+                {
+                    "batch": batch_index,
+                    "target_count": len(file_batch),
+                    "exit_status": result.returncode,
+                    "stderr": result.stderr.strip(),
+                }
+            )
+        result.check_returncode()
+        stdout = result.stdout
         if mode == "--residency":
             if not stdout.startswith(residency_header):
                 raise RuntimeError("Residency collector returned an invalid CSV header")
@@ -737,7 +905,11 @@ def run_collector_file_command(adb: Adb, mode: str, files: list[str]) -> str:
 
 
 def parse_residency(
-    text: str, phase: str, expected_files: Optional[Iterable[str]] = None
+    text: str,
+    phase: str,
+    expected_files: Optional[Iterable[str]] = None,
+    required_files: Optional[Iterable[str]] = None,
+    warnings: Optional[list[str]] = None,
 ) -> list[dict[str, object]]:
     if not text:
         return []
@@ -780,12 +952,19 @@ def parse_residency(
         )
     if expected_files is not None:
         expected = set(expected_files)
-        if seen != expected:
-            missing = sorted(expected - seen)
-            unexpected = sorted(seen - expected)
+        missing = sorted(expected - seen)
+        unexpected = sorted(seen - expected)
+        required_missing = sorted(set(required_files or ()) - seen)
+        if required_missing or unexpected:
             raise RuntimeError(
                 "Cache-residency coverage mismatch: "
-                f"missing={missing!r}, unexpected={unexpected!r}"
+                f"missing_required={required_missing!r}, "
+                f"unexpected={unexpected!r}"
+            )
+        if missing and warnings is not None:
+            warnings.append(
+                f"{phase}: ignored {len(missing)} non-essential app files that "
+                "disappeared during the residency check: " + ", ".join(missing)
             )
     return rows
 
@@ -818,22 +997,6 @@ def verify_cache_residency(
         + "; ".join(resident_files)
         + ". Reboot the target before the next iteration, or use an explicit "
         "nonzero threshold only if a partially warm cache is intentional."
-    )
-
-
-def verify_cache_target_set(
-    expected_files: Iterable[str], current_files: Iterable[str]
-) -> None:
-    expected = set(expected_files)
-    current = set(current_files)
-    if expected == current:
-        return
-    added = sorted(current - expected)
-    removed = sorted(expected - current)
-    raise RuntimeError(
-        "App-owned cache target set changed before launch: "
-        f"added={added!r}, removed={removed!r}. "
-        "Refusing to launch with incomplete cache-residency coverage."
     )
 
 
@@ -1013,7 +1176,7 @@ def stop_perfetto(adb: Adb, process: subprocess.Popen, device_pid: int) -> None:
         raise RuntimeError("Unable to stop Perfetto cleanly: " + stdout.strip())
 
 
-def start_fault_collector(adb: Adb) -> tuple[subprocess.Popen, int, int]:
+def start_fault_collector(adb: Adb) -> tuple[subprocess.Popen, int, int, str]:
     command = (
         f"{shlex.quote(REMOTE_COLLECTOR)} "
         f"--output {shlex.quote(REMOTE_FAULTS)} "
@@ -1032,10 +1195,17 @@ def start_fault_collector(adb: Adb) -> tuple[subprocess.Popen, int, int]:
     for line in process.stdout:
         output.append(line)
         match = re.search(
-            r"READY pid=(?P<pid>\d+) capture_start_ns=(?P<start>\d+)", line
+            r"READY pid=(?P<pid>\d+) capture_start_ns=(?P<start>\d+) "
+            r"online_cpus=(?P<online_cpus>[0-9,-]+)",
+            line,
         )
         if match:
-            return process, int(match.group("pid")), int(match.group("start"))
+            return (
+                process,
+                int(match.group("pid")),
+                int(match.group("start")),
+                match.group("online_cpus"),
+            )
     raise RuntimeError("Fault collector failed to start:\n" + "".join(output))
 
 
@@ -1077,19 +1247,39 @@ def dump_process_state(adb: Adb, package: str, output_dir: Path) -> int:
 
 
 def dump_inode_mapping(
-    adb: Adb, package: str, apk_paths: list[str], output_dir: Path
+    adb: Adb,
+    package: str,
+    apk_paths: list[str],
+    output_dir: Path,
+    *,
+    append: bool = False,
 ) -> None:
     roots = sorted({str(Path(path).parent) for path in apk_paths})
     roots.extend([f"/data/user/0/{package}", f"/data/user_de/0/{package}"])
-    parts = []
+    parts = [
+        (
+            f"stat -c '%d|%i|%s|%n' {shlex.quote(apk_path)} || "
+            f"{{ echo 'Unable to identify installed APK inode: "
+            f"{shlex.quote(apk_path)}' >&2; exit 75; }};"
+        )
+        for apk_path in apk_paths
+    ]
     for root in roots:
         parts.append(
             f"if [ -d {shlex.quote(root)} ]; then "
-            f"find {shlex.quote(root)} -type f -print0; fi;"
+            f"find {shlex.quote(root)} -type f "
+            "-exec sh -c 'for file do "
+            "stat -c '\"'\"'%d|%i|%s|%n'\"'\"' \"$file\" 2>/dev/null || true; "
+            "done' sh {} + 2>/dev/null || true; fi;"
         )
-    command = "{ " + " ".join(parts) + ' } | xargs -0 -r stat -c "%d|%i|%s|%n"'
-    result = adb.root_shell(command, capture_output=True, text=True, check=True)
-    (output_dir / "inodes.txt").write_text(result.stdout)
+    result = adb.root_shell(
+        "{ " + " ".join(parts) + " }",
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    with (output_dir / "inodes.txt").open("a" if append else "w") as output:
+        output.write(result.stdout)
 
 
 def pull_artifacts(
@@ -1168,8 +1358,14 @@ def collect(
         ).stdout.strip(),
         "abi": abi,
         "page_size": page_size,
+        "online_cpus_sysfs": adb.shell(
+            ["cat", "/sys/devices/system/cpu/online"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip(),
         "collector": "perf-software-page-fault-events",
-        "collector_version": 2,
+        "collector_version": 3,
         "cache_procedure": (
             "force-stop-wait+stable-target-set+sync+drop_caches+fadvise+mincore-v3"
         ),
@@ -1193,9 +1389,12 @@ def collect(
         "capture_status": "preparing",
         **build_info,
     }
+    capture_warnings: list[str] = []
+    metadata["warnings"] = capture_warnings
     write_capture_metadata(output_dir, metadata)
 
     targets = stop_and_enumerate_cache_targets(adb, package, apk_paths)
+    dump_inode_mapping(adb, package, apk_paths, output_dir)
 
     residency_rows = []
     residency_rows.extend(
@@ -1203,6 +1402,8 @@ def collect(
             run_collector_file_command(adb, "--residency", targets),
             "before_drop",
             targets,
+            apk_paths,
+            capture_warnings,
         )
     )
     write_residency(output_dir, residency_rows)
@@ -1213,6 +1414,8 @@ def collect(
             run_collector_file_command(adb, "--residency", targets),
             "after_drop",
             targets,
+            apk_paths,
+            capture_warnings,
         )
     )
     write_residency(output_dir, residency_rows)
@@ -1232,25 +1435,52 @@ def collect(
     perfetto_pid = None
     try:
         perfetto_process, perfetto_pid = start_perfetto(adb, remote_trace)
-        collector_process, collector_pid, collector_start = start_fault_collector(adb)
+        (
+            collector_process,
+            collector_pid,
+            collector_start,
+            collector_online_cpus,
+        ) = start_fault_collector(adb)
         metadata["collector_start_ns"] = collector_start
+        metadata["collector_online_cpus"] = collector_online_cpus
+        if collector_online_cpus != metadata["online_cpus_sysfs"]:
+            raise RuntimeError(
+                "CPU topology changed while starting the collector: "
+                f"sysfs={metadata['online_cpus_sysfs']!r}, "
+                f"collector={collector_online_cpus!r}"
+            )
 
         current_targets = cache_targets(
             package_files(adb, package, package_paths(adb, package))
         )
-        try:
-            verify_cache_target_set(targets, current_targets)
-        except RuntimeError as error:
-            metadata["capture_status"] = "cache_verification_failed"
-            metadata["failure"] = str(error)
-            write_capture_metadata(output_dir, metadata)
-            raise
+        missing_required = sorted(set(apk_paths) - set(current_targets))
+        if missing_required:
+            raise RuntimeError(
+                "Installed APK cache targets disappeared before launch: "
+                + ", ".join(missing_required)
+            )
+        removed_targets = sorted(set(targets) - set(current_targets))
+        added_targets = sorted(set(current_targets) - set(targets))
+        if removed_targets:
+            capture_warnings.append(
+                "Before launch, ignored non-essential app files that "
+                "disappeared: " + ", ".join(removed_targets)
+            )
+        if added_targets:
+            capture_warnings.append(
+                "Before launch, evicted and verified newly discovered app "
+                "files: " + ", ".join(added_targets)
+            )
+            run_collector_file_command(adb, "--evict", added_targets)
+        targets = current_targets
 
         residency_rows.extend(
             parse_residency(
                 run_collector_file_command(adb, "--residency", targets),
                 "before_launch",
                 targets,
+                apk_paths,
+                capture_warnings,
             )
         )
         write_residency(output_dir, residency_rows)
@@ -1274,17 +1504,55 @@ def collect(
 
         pid = dump_process_state(adb, package, output_dir)
         metadata["pid"] = pid
-        dump_inode_mapping(adb, package, apk_paths, output_dir)
+        dump_inode_mapping(adb, package, apk_paths, output_dir, append=True)
 
         time.sleep(settle_ms / 1000)
-        residency_rows.extend(
-            parse_residency(
-                run_collector_file_command(adb, "--residency", targets),
-                "after_launch",
-                targets,
+        post_launch_diagnostics: list[dict[str, object]] = []
+        post_launch_warnings: list[str] = []
+        try:
+            residency_rows.extend(
+                parse_residency(
+                    run_collector_file_command(
+                        adb,
+                        "--residency",
+                        targets,
+                        post_launch_diagnostics,
+                    ),
+                    "after_launch",
+                    targets,
+                    (),
+                    post_launch_warnings,
+                )
             )
-        )
-        write_residency(output_dir, residency_rows)
+            write_residency(output_dir, residency_rows)
+            skipped_details = [
+                str(command["stderr"])
+                for command in post_launch_diagnostics
+                if command["stderr"]
+            ] + post_launch_warnings
+            if skipped_details:
+                capture_warnings.append(
+                    "Post-launch residency check completed with collector exit "
+                    "status 0 and skipped changing files: "
+                    + " | ".join(skipped_details)
+                )
+        except (subprocess.CalledProcessError, RuntimeError) as error:
+            exit_status = (
+                error.returncode
+                if isinstance(error, subprocess.CalledProcessError)
+                else 0
+            )
+            capture_warnings.append(
+                "Post-launch residency check failed after the startup trace was "
+                f"captured (collector exit status {exit_status}: {error}); the "
+                "capture was preserved. Pre-launch eviction verification was "
+                "not affected."
+            )
+            metadata["post_launch_residency_exit_status"] = exit_status
+            metadata["post_launch_residency_error"] = str(error)
+        finally:
+            metadata["post_launch_residency_commands"] = post_launch_diagnostics
+            write_capture_metadata(output_dir, metadata)
     finally:
         if collector_process is not None and collector_pid is not None:
             return_code, collector_metadata = stop_fault_collector(
@@ -1324,11 +1592,14 @@ def collect(
     write_capture_metadata(output_dir, metadata)
 
 
-def parse_inode_mapping(
-    output_dir: Path, map_entries: list[MapEntry]
-) -> tuple[dict[tuple[int, int], str], dict[str, int]]:
+def parse_inode_mapping(output_dir: Path, map_entries: list[MapEntry]) -> tuple[
+    dict[tuple[int, int], str],
+    dict[str, int],
+    set[tuple[int, int]],
+]:
     inode_paths: dict[tuple[int, int], str] = {}
     file_sizes: dict[str, int] = {}
+    app_inode_keys: set[tuple[int, int]] = set()
     for entry in map_entries:
         if entry.inode and entry.file_name and not entry.file_name.startswith("["):
             inode_paths[(entry.device, entry.inode)] = entry.file_name
@@ -1347,7 +1618,8 @@ def parse_inode_mapping(
             key = (int(device), int(inode))
             inode_paths.setdefault(key, file_name)
             file_sizes[file_name] = int(size)
-    return inode_paths, file_sizes
+            app_inode_keys.add(key)
+    return inode_paths, file_sizes, app_inode_keys
 
 
 def load_artifacts(output_dir: Path) -> dict[str, Path]:
@@ -1541,6 +1813,7 @@ def write_page_cache_events(
     metadata: dict[str, object],
     startup: dict[str, str],
     inode_paths: dict[tuple[int, int], str],
+    app_inode_keys: set[tuple[int, int]],
     zip_entries: dict[str, list[ZipEntry]],
 ) -> list[dict[str, object]]:
     page_size = int(metadata["page_size"])
@@ -1549,6 +1822,7 @@ def write_page_cache_events(
         int(metadata["pid"]),
         int(startup["ts"]),
         int(startup["ts_end"]),
+        app_inode_keys,
     )
     events = []
     for row in rows:
@@ -1606,6 +1880,43 @@ def write_page_cache_events(
         writer.writeheader()
         writer.writerows(events)
     return events
+
+
+def write_vdex_analysis(
+    output_dir: Path,
+    analyses: dict[str, VdexAnalysis],
+    page_size: int,
+) -> list[dict[str, object]]:
+    fields = [
+        "file_name",
+        "dex_name",
+        "start_offset",
+        "page_index",
+        "checksum",
+        "format_version",
+        "identity_verified",
+    ]
+    rows: list[dict[str, object]] = []
+    for file_name, analysis in sorted(analyses.items()):
+        if not analysis.identities_verified:
+            continue
+        for index, dex_range in enumerate(analysis.dex_ranges):
+            rows.append(
+                {
+                    "file_name": file_name,
+                    "dex_name": dex_range.file_name,
+                    "start_offset": dex_range.data_offset,
+                    "page_index": dex_range.data_offset // page_size,
+                    "checksum": f"0x{analysis.stored_checksums[index]:08x}",
+                    "format_version": analysis.format_version,
+                    "identity_verified": True,
+                }
+            )
+    with (output_dir / "vdex_dex_boundaries.csv").open("w", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+    return rows
 
 
 def write_file_sizes(
@@ -1685,7 +1996,9 @@ def process_capture(output_dir: Path) -> None:
 
     map_entries = parse_maps(output_dir)
     mapping_events = parse_mapping_events(output_dir, int(metadata["pid"]))
-    inode_paths, file_sizes = parse_inode_mapping(output_dir, map_entries)
+    inode_paths, file_sizes, app_inode_keys = parse_inode_mapping(
+        output_dir, map_entries
+    )
     artifacts = load_artifacts(output_dir)
     file_sections = {
         remote_path: read_zip_entries(local_path)
@@ -1697,10 +2010,12 @@ def process_capture(output_dir: Path) -> None:
         for remote_path in file_sections
         if remote_path.endswith(".apk")
     }
+    vdex_analyses: dict[str, VdexAnalysis] = {}
     for remote_path, local_path in artifacts.items():
         if not remote_path.endswith(".vdex"):
             continue
-        artifact_root = str(Path(remote_path).parents[2])
+        parents = Path(remote_path).parents
+        artifact_root = str(parents[2]) if len(parents) > 2 else ""
         apk_path = next(
             (
                 candidate
@@ -1710,9 +2025,23 @@ def process_capture(output_dir: Path) -> None:
             ),
             None,
         )
-        file_sections[remote_path] = read_android10_vdex_entries(
-            local_path, apk_dex_identities.get(apk_path)
-        )
+        analysis = read_vdex(local_path, apk_dex_identities.get(apk_path))
+        if analysis is not None:
+            vdex_analyses[remote_path] = analysis
+    metadata["vdex_files"] = [
+        {
+            "file_name": remote_path,
+            "format_version": analysis.format_version,
+            "stored_dex_checksums": [
+                f"0x{checksum:08x}" for checksum in analysis.stored_checksums
+            ],
+            "embedded_dex_files": len(analysis.dex_ranges),
+            "dex_identities_verified": analysis.identities_verified,
+            "verification_note": analysis.verification_note,
+        }
+        for remote_path, analysis in sorted(vdex_analyses.items())
+    ]
+    write_vdex_analysis(output_dir, vdex_analyses, int(metadata["page_size"]))
     thread_names = query_thread_names(trace, int(metadata["pid"]))
     all_faults, mapped_faults = write_fault_csvs(
         output_dir,
@@ -1729,6 +2058,7 @@ def process_capture(output_dir: Path) -> None:
         metadata,
         startup,
         inode_paths,
+        app_inode_keys,
         file_sections,
     )
     write_file_sizes(output_dir, file_sizes, file_sections)
@@ -1797,7 +2127,10 @@ def main() -> None:
             "file-backed addresses to files."
         )
     )
-    parser.add_argument("--package", required=True)
+    parser.add_argument(
+        "--package",
+        help="Installed package (required only when collecting a new capture)",
+    )
     parser.add_argument("--activity")
     parser.add_argument("--output", default="output")
     parser.add_argument("--serial")
@@ -1845,6 +2178,8 @@ def main() -> None:
         parser.error("--settle-ms must be between 0 and 10000")
     if args.max_resident_pages < 0:
         parser.error("--max-resident-pages must be nonnegative")
+    if not args.skip_collect and not args.package:
+        parser.error("--package is required unless --skip-collect is used")
 
     output_dir = Path(args.output)
     if not args.skip_collect:

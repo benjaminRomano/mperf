@@ -64,16 +64,52 @@ class AndroidFaultsCommandTest {
 
         val result =
             command.test(
-                "--package com.example.app --out $output --skip-collect --no-pull-artifacts " +
+                "--out $output --skip-collect --no-pull-artifacts " +
                     "--compare $comparison --compare-label reordered --allow-incomparable --no-open",
             )
 
         assertEquals(0, result.statusCode, result.output)
         assertTrue(shell.runCommandCalls[1].contains("'--skip-collect'"))
+        assertTrue(!shell.runCommandCalls[1].contains("'--package'"))
         assertTrue(shell.runCommandCalls[1].contains("'--no-pull-apks'"))
         assertTrue(shell.runCommandCalls[2].contains("'--compare' '${comparison.toAbsolutePath()}'"))
         assertTrue(shell.runCommandCalls[2].contains("'--compare-label' 'reordered'"))
         assertTrue(shell.runCommandCalls[2].contains("'--allow-incomparable'"))
+    }
+
+    @Test
+    fun `new collection still requires a package`() {
+        val command =
+            AndroidFaultsCommand(
+                FakeShell(),
+                Config(android = null),
+                FixedFaultEngine(temporaryDirectory.resolve("engine")),
+            )
+
+        val result = command.test("--out ${temporaryDirectory.resolve("capture")} --no-open")
+
+        assertEquals(1, result.statusCode)
+        assertTrue(result.output.contains("Package name must be provided"))
+    }
+
+    @Test
+    fun `saved capture identity overrides configured package`() {
+        val shell = FakeShell()
+        val command =
+            AndroidFaultsCommand(
+                shell,
+                Config(android = AndroidConfig(packageName = "com.stale.config")),
+                FixedFaultEngine(temporaryDirectory.resolve("engine")),
+            )
+
+        val result =
+            command.test(
+                "--out ${temporaryDirectory.resolve("saved-capture")} --skip-collect --no-open",
+            )
+
+        assertEquals(0, result.statusCode, result.output)
+        assertTrue(!shell.runCommandCalls[1].contains("'--package'"))
+        assertTrue(!shell.runCommandCalls[1].contains("com.stale.config"))
     }
 }
 

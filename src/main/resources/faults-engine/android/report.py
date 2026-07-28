@@ -11,6 +11,8 @@ import plotly.graph_objects as go
 import plotly.io as pio
 from plotly.subplots import make_subplots
 
+from faults import is_app_owned_path
+
 
 MAJOR_COLOR = "#D97706"
 MINOR_COLOR = "#2563EB"
@@ -52,6 +54,7 @@ class Capture:
     mapped_faults: pd.DataFrame
     page_cache: pd.DataFrame
     residency: pd.DataFrame
+    vdex_boundaries: pd.DataFrame
 
     @property
     def page_size(self) -> int:
@@ -101,6 +104,7 @@ def read_capture(path: Path, label: Optional[str] = None) -> Capture:
         mapped_faults=read_csv("mapped_faults.csv"),
         page_cache=read_csv("page_cache_events.csv"),
         residency=read_csv("cache_residency.csv"),
+        vdex_boundaries=read_csv("vdex_dex_boundaries.csv"),
     )
     for frame in (capture.all_faults, capture.mapped_faults):
         if not frame.empty:
@@ -130,6 +134,13 @@ def app_relative_path(file_name: str, package: str) -> str:
         suffix = file_name.split(marker, 1)[1]
         return suffix.split("/", 1)[1] if "/" in suffix else suffix
     return file_name
+
+
+def app_file_mask(paths: pd.Series, package: str) -> pd.Series:
+    """Match exact Android package path segments, not similarly named apps."""
+    return (
+        paths.fillna("").astype(str).map(lambda path: is_app_owned_path(path, package))
+    )
 
 
 def source_label(row: pd.Series, package: str) -> str:
@@ -225,33 +236,47 @@ def source_summary(capture: Capture, limit: int = 15) -> pd.DataFrame:
 
 
 def top_sources_figure(capture: Capture) -> go.Figure:
-    summary = source_summary(capture).sort_values("total")
+    summary = source_summary(capture).sort_values(
+        ["major", "total"], ascending=[True, True]
+    )
+    full_labels = summary.index.astype(str).tolist()
+    short_labels = [short_source_label(label) for label in full_labels]
     figure = go.Figure()
     figure.add_bar(
-        y=summary.index,
+        y=full_labels,
         x=summary["minor"],
         orientation="h",
         name="Minor",
         marker=dict(color=MINOR_COLOR),
-        customdata=summary[["total"]],
+        customdata=list(zip(full_labels, summary["total"])),
         hovertemplate=(
-            "%{y}<br>Minor faults: %{x:,}<br>Total faults: %{customdata[0]:,}"
+            "%{customdata[0]}<br>Minor faults: %{x:,}<br>"
+            "Total faults: %{customdata[1]:,}"
             "<extra></extra>"
         ),
     )
     figure.add_bar(
-        y=summary.index,
+        y=full_labels,
         x=summary["major"],
         orientation="h",
         name="Major",
         marker=dict(color=MAJOR_COLOR),
-        hovertemplate="%{y}<br>Major faults: %{x:,}<extra></extra>",
+        customdata=full_labels,
+        text=summary["major"].map(lambda value: f"{int(value):,}" if value else ""),
+        textposition="inside",
+        hovertemplate="%{customdata}<br>Major faults: %{x:,}<extra></extra>",
     )
     figure.update_layout(
         title="File-backed page faults by source",
         barmode="stack",
         xaxis_title="Fault count",
         yaxis_title="",
+    )
+    figure.update_yaxes(
+        tickmode="array",
+        tickvals=full_labels,
+        ticktext=short_labels,
+        tickfont=dict(size=10),
     )
     return figure_layout(figure, max(520, 28 * len(summary) + 180))
 
@@ -375,7 +400,7 @@ def all_fault_address_figure(capture: Capture) -> go.Figure:
                 scope_mask & faults["event_type"].eq(event_type)
             ].sort_values("elapsed_ms")
             figure.add_trace(
-                go.Scattergl(
+                go.Scatter(
                     x=subset["elapsed_ms"],
                     y=subset["address"],
                     mode="markers",
@@ -494,7 +519,12 @@ def overall_timeline_figure(capture: Capture) -> go.Figure:
         figure.update_layout(title="No file-backed fault timeline is available")
         return figure_layout(figure, 420)
     faults = capture.mapped_faults.copy()
-    source_counts = faults.groupby("source_label").size().sort_values(ascending=False)
+    source_counts = (
+        faults.assign(_major=faults["event_type"].eq("major").astype(int))
+        .groupby("source_label")
+        .agg(major=("_major", "sum"), total=("_major", "size"))
+        .sort_values(["major", "total"], ascending=[False, False])
+    )
     source_order = source_counts.index.tolist()
     labeled_sources = source_order[:18]
     quiet_sources = source_order[18:]
@@ -520,7 +550,7 @@ def overall_timeline_figure(capture: Capture) -> go.Figure:
     ]:
         subset = faults[faults["event_type"] == event_type]
         figure.add_trace(
-            go.Scattergl(
+            go.Scatter(
                 x=subset["elapsed_ms"],
                 y=subset["source_lane"],
                 mode="markers",
@@ -558,12 +588,7 @@ def overall_timeline_figure(capture: Capture) -> go.Figure:
 
 
 def sequence_views(capture: Capture, limit: int = 50) -> list[SequenceView]:
-    """Build whole-file and section drill-downs for sequence analysis.
-
-    VDEX files are represented first as complete files using file-relative page
-    indices. Their individual DEX payloads remain available as drill-downs, but
-    CompactDex shared data is only included in the complete-file view.
-    """
+    """Build whole-file VDEX and non-VDEX section views for sequence analysis."""
     if capture.mapped_faults.empty:
         return []
 
@@ -706,6 +731,7 @@ def sequence_figure(capture: Capture) -> go.Figure:
 
     figure = go.Figure()
     trace_groups = []
+    shape_groups: list[list[dict[str, object]]] = []
     for key_index, view in enumerate(views):
         group = view.faults.sort_values("ts").reset_index(drop=True)
         group["unit_sequence"] = group.index
@@ -717,7 +743,7 @@ def sequence_figure(capture: Capture) -> go.Figure:
             subset = group[group["event_type"] == event_type]
             trace_indices.append(len(figure.data))
             figure.add_trace(
-                go.Scattergl(
+                go.Scatter(
                     x=subset["unit_sequence"],
                     y=subset["sequence_page"],
                     mode="markers",
@@ -746,6 +772,31 @@ def sequence_figure(capture: Capture) -> go.Figure:
                 )
             )
         trace_groups.append(trace_indices)
+        shapes: list[dict[str, object]] = []
+        if view.key.startswith("vdex-file::") and not capture.vdex_boundaries.empty:
+            file_name = str(group["file_name"].iloc[0])
+            boundaries = capture.vdex_boundaries[
+                capture.vdex_boundaries["file_name"].astype(str).eq(file_name)
+            ]
+            for _, boundary in boundaries.iterrows():
+                page_index = int(boundary["page_index"])
+                shapes.append(
+                    {
+                        "type": "line",
+                        "xref": "paper",
+                        "x0": 0,
+                        "x1": 1,
+                        "y0": page_index,
+                        "y1": page_index,
+                        "line": {"color": "#DC2626", "width": 1.5},
+                        "label": {
+                            "text": str(boundary["dex_name"]),
+                            "textposition": "start",
+                            "font": {"color": "#B91C1C", "size": 11},
+                        },
+                    }
+                )
+        shape_groups.append(shapes)
 
     figure.update_layout(
         xaxis_title="Fault index within selected view",
@@ -753,7 +804,9 @@ def sequence_figure(capture: Capture) -> go.Figure:
         meta={
             "selector_options": [view.label for view in views],
             "traces_per_option": 2,
+            "shape_groups": shape_groups,
         },
+        shapes=shape_groups[0],
     )
     return figure_layout(figure, 620, dict(l=64, r=28, t=42, b=64))
 
@@ -777,7 +830,7 @@ def page_cache_figure(capture: Capture) -> go.Figure:
     for label in top.index:
         subset = events[events["source_label"] == label]
         figure.add_trace(
-            go.Scattergl(
+            go.Scatter(
                 x=subset["elapsed_ms"],
                 y=subset["page_index"],
                 mode="markers",
@@ -816,7 +869,7 @@ def page_cache_figure(capture: Capture) -> go.Figure:
 def comparison_summary(base: Capture, test: Capture) -> pd.DataFrame:
     def metrics(capture: Capture) -> dict[str, float]:
         app_faults = capture.mapped_faults[
-            capture.mapped_faults["file_name"].str.contains(capture.package, na=False)
+            app_file_mask(capture.mapped_faults["file_name"], capture.package)
         ]
         cache = capture.metadata["cache_verification"]
         return {
@@ -880,7 +933,7 @@ def comparison_sources_figure(base: Capture, test: Capture) -> go.Figure:
         if capture.mapped_faults.empty:
             return pd.Series(dtype="int64")
         faults = capture.mapped_faults[
-            capture.mapped_faults["file_name"].str.contains(capture.package, na=False)
+            app_file_mask(capture.mapped_faults["file_name"], capture.package)
             & capture.mapped_faults["is_major"]
         ]
         return faults.groupby("unit_key").size()
@@ -953,7 +1006,7 @@ def comparison_sequence_figure(base: Capture, test: Capture) -> go.Figure:
                 subset = group[group["event_type"] == event_type]
                 indices.append(len(figure.data))
                 figure.add_trace(
-                    go.Scattergl(
+                    go.Scatter(
                         x=subset.index,
                         y=subset["sequence_page"],
                         mode="markers",
@@ -1013,7 +1066,7 @@ def dataframe_table(frame: pd.DataFrame, formatters: Optional[dict] = None) -> s
 def metric_cards(capture: Capture) -> str:
     results = capture.metadata["results"]
     app_faults = capture.mapped_faults[
-        capture.mapped_faults["file_name"].str.contains(capture.package, na=False)
+        app_file_mask(capture.mapped_faults["file_name"], capture.package)
     ]
     app_major = int(app_faults["is_major"].sum())
     app_minor = int((~app_faults["is_major"]).sum())
@@ -1081,7 +1134,16 @@ def quality_notes(capture: Capture) -> list[str]:
     )
     notes.append(
         "Page-cache insertion events are shown separately. They are cache fills "
-        "(including readahead), not page faults and not minor-fault observations."
+        "(including readahead and kernel-worker activity on exact app-file "
+        "device/inode pairs), not page faults and not minor-fault observations. "
+        "Their timing is correlated evidence, not proof that a specific fault "
+        "caused a fill."
+    )
+    notes.append(
+        "The perf-event stream and kernel process fault counters have different "
+        "capture and accounting boundaries. Faults accounted before collection, "
+        "after its cutoff, or without a delivered perf sample are not points in "
+        "these charts."
     )
     notes.append(
         "Mappings created during collection are resolved against their timestamped "
@@ -1110,6 +1172,7 @@ def selector_control(figure: go.Figure, chart_id: str, label: str) -> str:
     metadata = figure.layout.meta or {}
     options = metadata.get("selector_options", [])
     traces_per_option = int(metadata.get("traces_per_option", 0))
+    shape_groups = metadata.get("shape_groups", [[] for _ in options])
     if not options or not traces_per_option:
         return ""
     select_id = f"{chart_id}-selector"
@@ -1129,13 +1192,17 @@ def selector_control(figure: go.Figure, chart_id: str, label: str) -> str:
         const select = document.getElementById({json.dumps(select_id)});
         const chart = document.getElementById({json.dumps(chart_id)});
         const tracesPerOption = {traces_per_option};
+        const shapeGroups = {json.dumps(shape_groups)};
         select.addEventListener("change", () => {{
-          const first = Number(select.value) * tracesPerOption;
+          const option = Number(select.value);
+          const first = option * tracesPerOption;
           const selected = Array.from(
             {{length: tracesPerOption}}, (_, index) => first + index
           );
           Plotly.restyle(chart, {{visible: false}}).then(
             () => Plotly.restyle(chart, {{visible: true}}, selected)
+          ).then(
+            () => Plotly.relayout(chart, {{shapes: shapeGroups[option] || []}})
           );
         }});
       }};
@@ -1421,7 +1488,8 @@ def build_report(
 
   <section>
     <h2>Where startup faults came from</h2>
-    <p>Regular files and attributed archive/VDEX sections ranked by demanded faults.</p>
+    <p>Regular files and APK sections ranked by demanded faults. Each VDEX remains
+    one source so its full-file optimization opportunity is not fragmented.</p>
     <div class="chart">{rendered["top-sources"]}</div>
     <p class="chart-note">Sorted by major faults, then total faults.</p>
   </section>
@@ -1437,8 +1505,8 @@ def build_report(
   <section>
     <h2>How sequential the page pattern was</h2>
     <p>Page index in fault order. Diagonal bands are sequential; vertical jumps
-    reach distant pages. Complete VDEX views use file-relative pages; APK and
-    per-DEX drill-downs use section-relative pages.</p>
+    reach distant pages. VDEX views use file-relative pages; checksum-verified
+    embedded DEX starts are marked in red. APK entries use section-relative pages.</p>
     {sequence_control}
     <div class="chart">{rendered["sequence"]}</div>
     <p class="chart-note">Next-page steps move one page forward or back. Nearby
@@ -1449,14 +1517,16 @@ def build_report(
 
   <section>
     <h2>Which sections were faulted</h2>
-    <p>File types plus exact APK and supported VDEX byte ranges.</p>
+    <p>File types plus exact APK sections. VDEX files remain whole sources.</p>
     <div class="chart">{rendered["categories"]}</div>
   </section>
 
   <section>
     <h2>Page-cache fills</h2>
-    <p class="callout"><strong>These are not faults.</strong> They are pages inserted
-    by reads or readahead and can explain later minor faults.</p>
+    <p class="callout"><strong>These are not faults.</strong> They are correlated
+    page-cache insertions from app threads, readahead, or kernel workers operating
+    on exact app-owned files. They can make later faults minor, but do not establish
+    which request caused a fill.</p>
     <div class="chart">{rendered["page-cache"]}</div>
     <p class="chart-note">The kernel tracepoint reported
     {cache_event_granularity} per insertion event in this capture.</p>
@@ -1484,10 +1554,11 @@ def build_report(
       supplies inherited mappings that predate it.</li>
       <li><strong>Page-cache insertion:</strong> a new page or folio added to a
       file's cache; it is not evidence that each inserted page was demanded.</li>
-      <li><strong>VDEX/ODEX:</strong> For supported VDEX formats, dex ranges are
-      matched to APK entries by ART's stored location checksums. The sequence
-      view starts with the complete VDEX; individual DEX payloads are optional
-      drill-downs, while shared CompactDex data stays in the complete-file view.
+      <li><strong>VDEX/ODEX:</strong> Android 10 VDEX 021/002 and modern sectioned
+      VDEX 027 files are parsed defensively. A <code>classes*.dex</code> name is
+      assigned only when the complete ordered set of ART location checksums
+      matches the APK entries. VDEX rankings and plots always represent the whole
+      file; verified embedded DEX starts appear only as red reference lines.
       ODEX pages remain compiled code because byte offsets alone do not identify
       an originating dex.</li>
     </ul>

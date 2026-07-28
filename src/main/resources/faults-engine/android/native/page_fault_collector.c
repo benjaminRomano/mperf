@@ -25,6 +25,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "cpu_list.h"
+
 #define RING_DATA_PAGES 256
 #define MAX_SAMPLES 500000
 #define MAX_MAPPING_SAMPLES 50000
@@ -255,6 +257,33 @@ static void usage(const char *program) {
           program, program, program);
 }
 
+static int read_online_cpus(int **cpus_out, size_t *count_out,
+                            char *online_text, size_t online_text_size) {
+  const char *path = "/sys/devices/system/cpu/online";
+  FILE *input = fopen(path, "r");
+  if (input == NULL) {
+    fprintf(stderr, "Unable to open %s: %s\n", path, strerror(errno));
+    return -1;
+  }
+  if (fgets(online_text, (int)online_text_size, input) == NULL) {
+    fprintf(stderr, "Unable to read %s: %s\n", path, strerror(errno));
+    fclose(input);
+    return -1;
+  }
+  if (fclose(input) != 0) {
+    fprintf(stderr, "Unable to close %s: %s\n", path, strerror(errno));
+    return -1;
+  }
+  char error[160] = {0};
+  if (parse_cpu_list(online_text, cpus_out, count_out, error, sizeof(error)) !=
+      0) {
+    fprintf(stderr, "Unable to parse %s (%s): %s\n", path, online_text, error);
+    return -1;
+  }
+  online_text[strcspn(online_text, "\r\n")] = '\0';
+  return 0;
+}
+
 static void write_csv_string(FILE *output, const char *value) {
   fputc('"', output);
   for (const char *cursor = value; *cursor != '\0'; ++cursor) {
@@ -271,6 +300,11 @@ static int evict_files(int file_count, char **paths) {
     const char *path = paths[index];
     const int fd = open(path, O_RDONLY | O_CLOEXEC);
     if (fd < 0) {
+      if (errno == ENOENT) {
+        fprintf(stderr, "Skipping file that disappeared during eviction: %s\n",
+                path);
+        continue;
+      }
       fprintf(stderr, "Unable to open %s: %s\n", path, strerror(errno));
       return EXIT_FAILURE;
     }
@@ -296,6 +330,12 @@ static int report_residency(int file_count, char **paths) {
     const char *path = paths[index];
     const int fd = open(path, O_RDONLY | O_CLOEXEC);
     if (fd < 0) {
+      if (errno == ENOENT) {
+        fprintf(stderr,
+                "Skipping file that disappeared during residency check: %s\n",
+                path);
+        continue;
+      }
       fprintf(stderr, "Unable to open %s: %s\n", path, strerror(errno));
       return EXIT_FAILURE;
     }
@@ -387,14 +427,18 @@ int main(int argc, char **argv) {
     return EXIT_FAILURE;
   }
 
-  const long cpu_count = sysconf(_SC_NPROCESSORS_ONLN);
   const long page_size = sysconf(_SC_PAGESIZE);
-  if (cpu_count <= 0 || page_size <= 0) {
-    fprintf(stderr, "Unable to determine CPU count or page size\n");
+  int *online_cpus = NULL;
+  size_t cpu_count = 0;
+  char online_cpu_text[4096] = {0};
+  if (page_size <= 0 ||
+      read_online_cpus(&online_cpus, &cpu_count, online_cpu_text,
+                       sizeof(online_cpu_text)) != 0) {
+    fprintf(stderr, "Unable to determine online CPUs or page size\n");
     return EXIT_FAILURE;
   }
 
-  const size_t ring_count = (size_t)cpu_count * 2;
+  const size_t ring_count = cpu_count * 2;
   struct perf_ring *rings = calloc(ring_count, sizeof(*rings));
   struct pollfd *poll_fds = calloc(ring_count, sizeof(*poll_fds));
   struct fault_sample *samples = malloc(MAX_SAMPLES * sizeof(*samples));
@@ -407,7 +451,8 @@ int main(int argc, char **argv) {
   }
 
   size_t opened_rings = 0;
-  for (int cpu = 0; cpu < cpu_count; ++cpu) {
+  for (size_t cpu_index = 0; cpu_index < cpu_count; ++cpu_index) {
+    const int cpu = online_cpus[cpu_index];
     for (int kind = FAULT_MINOR; kind <= FAULT_MAJOR; ++kind) {
       struct perf_event_attr attr = {
           .type = PERF_TYPE_SOFTWARE,
@@ -479,8 +524,9 @@ int main(int argc, char **argv) {
   uint64_t integrity_errors = 0;
   uint64_t throttled = 0;
 
-  fprintf(stderr, "READY pid=%d capture_start_ns=%" PRIu64 "\n", getpid(),
-          started_ns);
+  fprintf(stderr,
+          "READY pid=%d capture_start_ns=%" PRIu64 " online_cpus=%s\n",
+          getpid(), started_ns, online_cpu_text);
   fflush(stderr);
 
   while (!stop_requested && capture_time_ns() < deadline_ns) {
@@ -568,6 +614,7 @@ int main(int argc, char **argv) {
   free(samples);
   free(poll_fds);
   free(rings);
+  free(online_cpus);
   return lost == 0 && integrity_errors == 0 && throttled == 0 ? EXIT_SUCCESS
                                                               : 2;
 }

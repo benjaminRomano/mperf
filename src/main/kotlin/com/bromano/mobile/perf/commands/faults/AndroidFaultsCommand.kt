@@ -63,21 +63,24 @@ class AndroidFaultsCommand(
         .flag("--no-open", default = true)
 
     override fun run() {
-        val finalPackage =
-            packageName ?: config.android?.packageName
-                ?: throw PrintMessage(
-                    "Package name must be provided via --package or in config.yml",
-                    printError = true,
-                    statusCode = 1,
-                )
+        val finalPackage = packageName ?: config.android?.packageName
+        if (!skipCollect && finalPackage == null) {
+            throw PrintMessage(
+                "Package name must be provided via --package or in config.yml",
+                printError = true,
+                statusCode = 1,
+            )
+        }
         val finalOutput = (output ?: defaultFaultOutput("android")).absoluteNormalized()
         val engineDirectory = support.engineDirectory("android")
 
         val captureArguments =
             buildList {
                 add("faults.py")
-                add("--package")
-                add(finalPackage)
+                finalPackage?.takeUnless { skipCollect }?.let {
+                    add("--package")
+                    add(it)
+                }
                 add("--output")
                 add(finalOutput.toString())
                 activity?.let {

@@ -122,12 +122,19 @@ interactive Plotly visualizations. Reports are written to `artifacts/faults/` by
 versioned analysis engine into `~/.mperf/cache/faults-engine/` and creates its locked Python environment with `uv`.
 
 On Android, the collector uses kernel `perf_event_open` page-fault events and `PERF_RECORD_MMAP2` mappings. It
-attributes each fault to the mapped file and file offset, including APK entries and ODEX/VDEX sections when pulled
-artifacts are available. Collection requires an emulator or device where the collector can run as root; a `userdebug`
-or `eng` build is recommended. The command drops page cache through the privileged shell, verifies app-file residency
-with `mincore` immediately before launch, and fails a strict cold-cache run when the configured residency limit is
-exceeded. `--reboot-before-collect` provides the strongest reproducible setup. Reprocess a saved capture with
-`--skip-collect`, or compare captures with `--compare`.
+attributes each fault to the mapped file and file offset, including APK entries and whole ODEX/VDEX files when pulled
+artifacts are available. Android 10 and modern sectioned VDEX files are supported. Original `classes*.dex` boundaries
+are labeled only when every ART-stored DEX location checksum matches the corresponding APK entry; an unverified VDEX
+is never guessed. Page-cache events include the app process and background or kernel-worker insertions targeting the
+exact device/inode identities of app-owned files. These events are correlated I/O evidence, not proof that a specific
+cache insertion caused a later fault.
+
+Collection requires an emulator or device where the collector can run as root; a `userdebug` or `eng` build is
+recommended. The command reads the exact online CPU list from sysfs, drops page cache through the privileged shell,
+verifies app-file residency with `mincore` immediately before launch, and fails a strict cold-cache run when the
+configured residency limit is exceeded. `--reboot-before-collect` provides the strongest reproducible setup.
+Reprocess a saved capture with `--skip-collect` (the package identity is read from the capture), or compare captures
+with `--compare`.
 
 ```bash
 mperf faults android \
@@ -135,6 +142,20 @@ mperf faults android \
   --device emulator-5554 \
   --reboot-before-collect
 ```
+
+For supplementary Android fault call stacks, use Simpleperf in a separate run:
+
+```bash
+mperf android start \
+  --format simpleperf \
+  --package com.example.app \
+  --simpleperfArgs "-e minor-faults,major-faults -g"
+```
+
+This opens the ordered samples and stacks in Firefox Profiler. It is deliberately
+separate from the authoritative low-overhead fault run: DWARF unwinding perturbs
+startup, can miss early faults, and does not share the strict cache gate or exact
+event identity of the `faults android` capture.
 
 On iOS, the command uses Instruments' Virtual Memory Trace and includes symbolicated fault stacks in a chronological,
 Firefox-Profiler-style stack view. For Simulator captures, Instruments observes the macOS host process: the report
@@ -159,7 +180,9 @@ mperf faults ios \
 ```
 
 The HTML reports are self-contained and show the all-file address/time pattern, per-file timelines, sequentiality,
-APK/DEX and VDEX/ODEX sections, major/minor evidence, comparison views, and available fault stacks. See the
+APK/DEX and VDEX/ODEX attribution, major/minor evidence, comparison views, and iOS fault stacks. Android's exact
+fault collector records the instruction pointer but does not currently unwind a call stack; Simpleperf can collect
+supplementary sampled fault stacks in a separate, more intrusive run. See the
 [`faults` CLI reference](docs/cli.md#faults) or run either platform command with `--help` for the full option set.
 
 ### Perfetto (Default)

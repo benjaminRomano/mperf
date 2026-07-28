@@ -117,6 +117,25 @@ tasks {
         classpath = sourceSets["main"].runtimeClasspath
     }
 
+    register<Exec>("testAndroidFaultEngine") {
+        group = "verification"
+        description = "Run dependency-free Android fault engine regression tests"
+        commandLine(
+            "python3",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "src/test/python",
+            "-p",
+            "test_*.py",
+        )
+    }
+
+    check {
+        dependsOn("testAndroidFaultEngine")
+    }
+
     // Build a runnable fat JAR via: ./gradlew shadowJar
     named<ShadowJar>("shadowJar") {
         archiveClassifier.set("all")

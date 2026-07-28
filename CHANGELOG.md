@@ -11,6 +11,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Added `mperf faults android` and `mperf faults ios` for cold-start page-fault collection, strict cache-residency
   evidence, file and section attribution, cross-capture comparison, symbolicated iOS fault stacks, and self-contained
   interactive HTML reports.
+- Added support for Android 10 and modern sectioned VDEX files. VDEX sources remain whole in rankings and plots, with
+  original DEX boundaries shown only after full ART/APK location-checksum verification.
+
+### Fixed
+
+- Fixed Android collection on noncontiguous CPU topologies by parsing and validating the exact online CPU list from
+  sysfs instead of assuming CPU identifiers are continuous.
+- Fixed Android page-cache evidence omitting background and kernel-worker insertions for app-owned device/inode pairs,
+  package-prefix attribution collisions, disappearing optional files, post-launch residency races, stopped-process
+  `pidof` handling, and saved-capture reprocessing without a locally configured package.
+- Fixed Android report source ordering to rank major faults first, retain whole VDEX sources, show verified embedded
+  DEX boundaries, preserve full source paths in hover details, and avoid WebGL-only scatter rendering.
 
 ## [1.1.0] - 2026-07-13
 

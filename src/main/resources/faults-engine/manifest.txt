@@ -1,6 +1,7 @@
 android/faults.py
 android/ftrace.config
 android/native/page_fault_collector.c
+android/native/cpu_list.h
 android/pyproject.toml
 android/report.py
 android/stack_report.py

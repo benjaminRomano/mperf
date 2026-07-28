@@ -158,6 +158,10 @@ class AdbTest {
         )
 
         assertNull(adb.pidof("test-process"))
+        verify(shell).runCommand(
+            command = eq("adb -s test-device shell pidof test-process"),
+            ignoreErrors = eq(true),
+        )
     }
 
     @Test
