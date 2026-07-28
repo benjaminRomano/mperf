@@ -129,6 +129,12 @@ is never guessed. Page-cache events include the app process and background or ke
 exact device/inode identities of app-owned files. These events are correlated I/O evidence, not proof that a specific
 cache insertion caused a later fault.
 
+The per-fault rows come from userspace events actually delivered by the perf subsystem. They are not reconstructed
+from `/proc/<pid>/stat` or process-level `min_flt`/`maj_flt` counters, so the report can contain fewer rows than those
+aggregate kernel counters. Conversely, the page-cache tracepoint is a different signal: it records cache insertions
+for the app process and for background workers operating on the app's exact device/inode pairs. Those insertions are
+not minor faults and are not added to the fault total.
+
 Collection requires an emulator or device where the collector can run as root; a `userdebug` or `eng` build is
 recommended. The command reads the exact online CPU list from sysfs, drops page cache through the privileged shell,
 verifies app-file residency with `mincore` immediately before launch, and fails a strict cold-cache run when the
@@ -152,16 +158,24 @@ mperf android start \
   --simpleperfArgs "-e minor-faults,major-faults -g"
 ```
 
-This opens the ordered samples and stacks in Firefox Profiler. It is deliberately
-separate from the authoritative low-overhead fault run: DWARF unwinding perturbs
-startup, can miss early faults, and does not share the strict cache gate or exact
-event identity of the `faults android` capture.
+This opens ordered trigger samples and stacks in Firefox Profiler. It is deliberately separate from the authoritative
+fault run. App-attached Simpleperf waits for the PID and therefore misses the beginning of startup. Its fault sample
+format also lacks `PERF_SAMPLE_ADDR`, so a stack cannot be joined to the exact faulted page or file. Frame-pointer
+unwinding is relatively light but incomplete for managed Java; DWARF gives better managed stacks but is more intrusive
+and can lose records. Treat this view as supplementary code-path evidence, require zero lost samples, and do not merge
+its rows with the exact `faults android` events.
 
 On iOS, the command uses Instruments' Virtual Memory Trace and includes symbolicated fault stacks in a chronological,
 Firefox-Profiler-style stack view. For Simulator captures, Instruments observes the macOS host process: the report
 filters to the app PID, and its storage behavior must not be interpreted as physical-device behavior. “Major” means a
 file-backed page-in operation; “minor” groups cache hits, zero-fill, copy-on-write, and decompression events. These are
 analysis buckets derived from Instruments operations, not Darwin kernel fault labels.
+
+The recorder is started first and the app is not launched until `xctrace` emits its explicit
+`--notify-tracing-started` notification. A bounded readiness timeout aborts and reaps the recorder on failure. The
+report attributes frames to the installed application bundle root, including bundled frameworks and `.appex`
+extensions; similarly structured binaries from another app are excluded. Code-ordering candidates require the
+faulting binary itself—not merely a caller deeper in the stack—to be app-bundle owned.
 
 Simulator cache verification inventories app-bundle files and checks their residency with `mincore` immediately before
 launch. `auto` first attempts the host `purge` utility and can use bounded memory pressure when

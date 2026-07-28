@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import signal
 import subprocess
 import time
 import uuid
@@ -12,6 +14,7 @@ from .subprocesses import command_text, run
 VIRTUAL_MEMORY_XPATH = (
     '/trace-toc/run[@number="1"]/data/table[@schema="virtual-memory"]'
 )
+NOTIFYUTIL_PATH = Path("/usr/bin/notifyutil")
 
 
 def xctrace_command(*arguments: str) -> list[str]:
@@ -55,15 +58,17 @@ def start_recording(
     require_virtual_memory_instrument()
     if trace_path.exists():
         raise RuntimeError(f"xctrace output already exists: {trace_path}")
-    notification = f"com.bromano.ios-fault-visualizer.{uuid.uuid4()}"
-    listener = None
-    if Path("/usr/bin/notifyutil").exists():
-        listener = subprocess.Popen(
-            ["/usr/bin/notifyutil", "-w", notification],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            text=True,
+    if not NOTIFYUTIL_PATH.exists():
+        raise RuntimeError(
+            "xctrace readiness requires /usr/bin/notifyutil on the macOS host"
         )
+    notification = f"com.bromano.ios-fault-visualizer.{uuid.uuid4()}"
+    listener = subprocess.Popen(
+        [str(NOTIFYUTIL_PATH), "-1", notification],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
 
     command = xctrace_command(
         "record",
@@ -74,8 +79,7 @@ def start_recording(
         f"{time_limit_seconds}s",
         "--output",
         str(trace_path),
-        "--notify-tracing-started",
-        notification,
+        f"--notify-tracing-started={notification}",
         "--no-prompt",
     )
     # Simulator apps are macOS host processes. Recording the Simulator device
@@ -87,34 +91,44 @@ def start_recording(
     stderr_path = log_directory / "xctrace.stderr.log"
     stdout_file = stdout_path.open("w")
     stderr_file = stderr_path.open("w")
-    process = subprocess.Popen(
-        command,
-        stdout=stdout_file,
-        stderr=stderr_file,
-        text=True,
-        start_new_session=True,
-    )
+    try:
+        process = subprocess.Popen(
+            command,
+            stdout=stdout_file,
+            stderr=stderr_file,
+            text=True,
+            start_new_session=True,
+        )
+    except BaseException:
+        listener.terminate()
+        try:
+            listener.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            listener.kill()
+            listener.wait()
+        stdout_file.close()
+        stderr_file.close()
+        raise
     process._ios_fault_stdout = stdout_file  # type: ignore[attr-defined]
     process._ios_fault_stderr = stderr_file  # type: ignore[attr-defined]
     return Recording(process, listener, command, stdout_path, stderr_path)
 
 
 def wait_until_recording(recording: Recording, timeout_seconds: int = 20) -> None:
-    # Notification delivery is not reliable across translated Python launchers
-    # and role-account helpers, so poll it and xctrace's native status output.
+    # --notify-tracing-started is xctrace's explicit readiness contract. A log
+    # line such as "Starting recording" can precede data collection and is not
+    # sufficient to launch the target.
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
-        notification_received = (
-            recording.notification_listener is not None
-            and recording.notification_listener.poll() is not None
+        listener_status = (
+            recording.notification_listener.poll()
+            if recording.notification_listener is not None
+            else None
         )
-        output = ""
-        for path in (recording.stdout_path, recording.stderr_path):
-            if path.exists():
-                output += path.read_text(errors="replace")
-        started = "Starting recording" in output or "Recording started" in output
-        if (notification_received or started) and recording.process.poll() is None:
+        if listener_status == 0 and recording.process.poll() is None:
             return
+        if listener_status is not None and listener_status != 0:
+            break
         if recording.process.poll() is not None:
             break
         time.sleep(0.1)
@@ -128,6 +142,44 @@ def wait_until_recording(recording: Recording, timeout_seconds: int = 20) -> Non
     )
 
 
+def _close_recording_handles(recording: Recording) -> None:
+    listener = recording.notification_listener
+    if listener is not None and listener.poll() is None:
+        listener.terminate()
+        try:
+            listener.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            listener.kill()
+            listener.wait()
+    stdout = getattr(recording.process, "_ios_fault_stdout", None)
+    stderr = getattr(recording.process, "_ios_fault_stderr", None)
+    if stdout is not None and not stdout.closed:
+        stdout.close()
+    if stderr is not None and not stderr.closed:
+        stderr.close()
+
+
+def abort_recording(recording: Recording, timeout_seconds: int = 15) -> None:
+    """Stop and reap a recorder after readiness, cache, or launch failure."""
+    try:
+        if recording.process.poll() is None:
+            try:
+                os.killpg(recording.process.pid, signal.SIGINT)
+            except (ProcessLookupError, PermissionError):
+                recording.process.terminate()
+            try:
+                recording.process.wait(timeout=timeout_seconds)
+            except subprocess.TimeoutExpired:
+                recording.process.terminate()
+                try:
+                    recording.process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    recording.process.kill()
+                    recording.process.wait()
+    finally:
+        _close_recording_handles(recording)
+
+
 def finish_recording(recording: Recording, timeout_seconds: int) -> None:
     try:
         return_code = recording.process.wait(timeout=timeout_seconds)
@@ -139,10 +191,7 @@ def finish_recording(recording: Recording, timeout_seconds: int) -> None:
             recording.process.kill()
             return_code = recording.process.wait()
     finally:
-        if recording.notification_listener is not None:
-            recording.notification_listener.terminate()
-        getattr(recording.process, "_ios_fault_stdout").close()
-        getattr(recording.process, "_ios_fault_stderr").close()
+        _close_recording_handles(recording)
     if return_code != 0:
         detail = recording.stderr_path.read_text(errors="replace").strip()
         raise RuntimeError(

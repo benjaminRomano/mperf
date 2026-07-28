@@ -622,10 +622,12 @@ def build_report(
     Simpleperf workflow.</strong> Do not compare its major/minor mix with a
     strict cache-cold exact run unless the same eviction and residency gate was
     executed immediately before this launch.</p>
-    <p>This is a stack-enabled Simpleperf capture, not the authoritative
-    low-overhead fault-count run. DWARF unwinding provides useful Java, ART,
-    framework, and native stacks, but it perturbs startup and may miss the
-    earliest faults while attaching to the new process.</p>
+    <p>This is a stack-enabled Simpleperf capture, not the authoritative exact
+    page/file run. App-attached DWARF provides useful Java, ART, framework, and
+    native trigger stacks, but it starts after the PID appears and therefore
+    misses early startup. Simpleperf's fault samples do not contain
+    <code>PERF_SAMPLE_ADDR</code>, so they cannot be joined to the exact faulted
+    virtual page or file. Do not merge these rows with the exact capture.</p>
     <p class="note">Parsed from {html.escape(str(source))}.</p>
   </section>
 </main>

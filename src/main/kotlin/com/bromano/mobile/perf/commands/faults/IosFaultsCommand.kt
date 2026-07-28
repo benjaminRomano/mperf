@@ -14,6 +14,7 @@ import com.github.ajalt.clikt.parameters.options.validate
 import com.github.ajalt.clikt.parameters.types.double
 import com.github.ajalt.clikt.parameters.types.int
 import com.github.ajalt.clikt.parameters.types.path
+import kotlin.math.ceil
 
 class IosFaultsCommand(
     private val shell: Shell,
@@ -84,7 +85,9 @@ class IosFaultsCommand(
         .flag("--no-open", default = true)
 
     override fun run() {
-        val finalBundle = bundleIdentifier ?: config.ios?.bundleIdentifier
+        val finalBundle =
+            bundleIdentifier
+                ?: config.ios?.bundleIdentifier?.takeIf { app == null }
         if (!skipCollect && finalBundle == null && app == null) {
             throw PrintMessage(
                 "Bundle identifier must be provided via --bundle/config.yml, or supply --app",
@@ -95,6 +98,16 @@ class IosFaultsCommand(
         if (requireColdCache && allowUnconfirmedCache) {
             throw PrintMessage(
                 "--require-cold-cache cannot be combined with --allow-unconfirmed-cache",
+                printError = true,
+                statusCode = 1,
+            )
+        }
+        val minimumTimeLimit = ceil(settleSeconds).toInt()
+        val requestedTimeLimit = timeLimit
+        if (requestedTimeLimit != null && requestedTimeLimit < minimumTimeLimit) {
+            throw PrintMessage(
+                "--time-limit must be at least ceil(--settle-seconds) " +
+                    "($minimumTimeLimit seconds)",
                 printError = true,
                 statusCode = 1,
             )

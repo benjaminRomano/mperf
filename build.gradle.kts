@@ -119,14 +119,21 @@ tasks {
 
     register<Exec>("testAndroidFaultEngine") {
         group = "verification"
-        description = "Run dependency-free Android fault engine regression tests"
+        description = "Run Android and iOS fault engine regression tests"
+        workingDir("src/main/resources/faults-engine/android")
         commandLine(
-            "python3",
+            "uv",
+            "run",
+            "--frozen",
+            "--no-dev",
+            "python",
             "-m",
             "unittest",
             "discover",
             "-s",
-            "src/test/python",
+            project.layout.projectDirectory
+                .dir("src/test/python")
+                .asFile.absolutePath,
             "-p",
             "test_*.py",
         )

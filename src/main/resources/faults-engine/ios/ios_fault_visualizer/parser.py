@@ -7,7 +7,7 @@ import sqlite3
 import tempfile
 import xml.etree.ElementTree as ET
 from collections import Counter, OrderedDict, defaultdict
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable
 
 MINOR_OPERATIONS = {
@@ -35,6 +35,7 @@ EVENT_FIELDS = [
     "faulting_instruction",
     "faulting_binary",
     "faulting_binary_path",
+    "faulting_binary_is_bundle_owned",
     "faulting_source_path",
     "faulting_source_line",
     "first_symbolicated_frame",
@@ -56,6 +57,7 @@ MAJOR_SUMMARY_FIELDS = [
     "faulting_frame",
     "faulting_instruction",
     "faulting_binary",
+    "faulting_binary_path",
     "faulting_source_path",
     "faulting_source_line",
     "first_symbolicated_frame",
@@ -67,6 +69,20 @@ MAJOR_SUMMARY_FIELDS = [
     "example_address_hex",
     "example_stack",
 ]
+
+GENERIC_APP_ENTRY_POINTS = {
+    "_start",
+    "start",
+    "main",
+    "NSExtensionMain",
+    "UIApplicationMain",
+}
+GENERIC_APP_FRAME_PREFIXES = (
+    "__llvm_profile_",
+    "<deduplicated",
+    "<redacted",
+    "<unknown",
+)
 
 
 class ValueRegistry:
@@ -224,12 +240,39 @@ def _first_frame(
     return next((frame for frame in frames if predicate(frame)), {})
 
 
+def _path_is_within_bundle(binary_path: str, app_bundle_root: str) -> bool:
+    if not binary_path or not app_bundle_root:
+        return False
+    try:
+        PurePosixPath(binary_path).relative_to(PurePosixPath(app_bundle_root))
+        return True
+    except ValueError:
+        return False
+
+
+def _infer_bundle_root(
+    frames: Iterable[dict[str, Any]],
+) -> str:
+    for frame in frames:
+        binary = frame.get("binary") or {}
+        path = PurePosixPath(str(binary.get("path") or ""))
+        for index, part in enumerate(path.parts):
+            if part.endswith(".app"):
+                return str(PurePosixPath(*path.parts[: index + 1]))
+    return ""
+
+
 def _is_app_frame(
-    frame: dict[str, Any], process_name: str, app_binary_name: str
+    frame: dict[str, Any],
+    process_name: str,
+    app_binary_name: str,
+    app_bundle_root: str = "",
 ) -> bool:
     binary = frame.get("binary") or {}
     binary_name = str(binary.get("name") or "")
     binary_path = str(binary.get("path") or "")
+    if app_bundle_root and binary_path:
+        return _path_is_within_bundle(binary_path, app_bundle_root)
     candidates = {name for name in (process_name, app_binary_name) if name}
     if binary_name in candidates:
         return True
@@ -243,9 +286,11 @@ def parse_events(
     target_pid: int,
     app_binary_name: str = "",
     maximum_time_since_first_ms: float | None = None,
+    app_bundle_root: str = "",
 ) -> list[dict[str, Any]]:
     registry = ValueRegistry(disk_backed=xml_path.stat().st_size >= 64 * 1024 * 1024)
     events: list[dict[str, Any]] = []
+    resolved_bundle_root = app_bundle_root
     for _, element in ET.iterparse(xml_path, events=("end",)):
         _register(registry, element)
         if element.tag != "row":
@@ -269,6 +314,10 @@ def parse_events(
         thread = _child_value(registry, element, "thread") or {}
         tagged_backtrace = _child_value(registry, element, "tagged-backtrace") or {}
         frames = tagged_backtrace.get("frames") or []
+        if not resolved_bundle_root:
+            resolved_bundle_root = _infer_bundle_root(
+                frames,
+            )
         faulting = frames[0] if frames else {}
         symbolicated = _first_frame(
             frames,
@@ -277,7 +326,12 @@ def parse_events(
         )
         app_frame = _first_frame(
             frames,
-            lambda frame: _is_app_frame(frame, process_name, app_binary_name),
+            lambda frame: _is_app_frame(
+                frame,
+                process_name,
+                app_binary_name,
+                resolved_bundle_root,
+            ),
         )
 
         faulting_binary = faulting.get("binary") or {}
@@ -302,6 +356,10 @@ def parse_events(
             "faulting_instruction": faulting.get("address", ""),
             "faulting_binary": faulting_binary.get("name", ""),
             "faulting_binary_path": faulting_binary.get("path", ""),
+            "faulting_binary_is_bundle_owned": _path_is_within_bundle(
+                str(faulting_binary.get("path") or ""),
+                resolved_bundle_root,
+            ),
             "faulting_source_path": faulting_source.get("path", ""),
             "faulting_source_line": faulting_source.get("line", 0),
             "first_symbolicated_frame": symbolicated.get("name", ""),
@@ -316,6 +374,12 @@ def parse_events(
         events.append(event)
         element.clear()
 
+    if resolved_bundle_root:
+        for event in events:
+            event["faulting_binary_is_bundle_owned"] = _path_is_within_bundle(
+                str(event.get("faulting_binary_path") or ""),
+                resolved_bundle_root,
+            )
     registry.close()
     events.sort(key=lambda event: event["trace_start_ns"])
     if not events:
@@ -340,7 +404,15 @@ def parse_events(
 def summarize_major_faults(events: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     grouped: defaultdict[tuple[Any, ...], list[dict[str, Any]]] = defaultdict(list)
     for event in events:
-        if event["fault_class"] != "Major":
+        faulting_frame = str(event.get("faulting_frame") or "")
+        if (
+            event["fault_class"] != "Major"
+            or not event.get("faulting_binary_is_bundle_owned")
+            or not faulting_frame
+            or faulting_frame.startswith("0x")
+            or faulting_frame in GENERIC_APP_ENTRY_POINTS
+            or faulting_frame.startswith(GENERIC_APP_FRAME_PREFIXES)
+        ):
             continue
         key = tuple(
             event[field]
@@ -348,6 +420,7 @@ def summarize_major_faults(events: Iterable[dict[str, Any]]) -> list[dict[str, A
                 "faulting_frame",
                 "faulting_instruction",
                 "faulting_binary",
+                "faulting_binary_path",
                 "faulting_source_path",
                 "faulting_source_line",
                 "first_symbolicated_frame",
@@ -368,6 +441,7 @@ def summarize_major_faults(events: Iterable[dict[str, Any]]) -> list[dict[str, A
                     "faulting_frame",
                     "faulting_instruction",
                     "faulting_binary",
+                    "faulting_binary_path",
                     "faulting_source_path",
                     "faulting_source_line",
                     "first_symbolicated_frame",
@@ -432,6 +506,7 @@ def _write_sqlite(
                         "duration_ns",
                         "tid",
                         "faulting_source_line",
+                        "faulting_binary_is_bundle_owned",
                         "first_app_source_line",
                         "stack_depth",
                     }
@@ -505,12 +580,14 @@ def process_virtual_memory_export(
     target_pid: int,
     app_binary_name: str = "",
     maximum_time_since_first_ms: float | None = None,
+    app_bundle_root: str = "",
 ) -> dict[str, Any]:
     events = parse_events(
         xml_path,
         target_pid,
         app_binary_name,
         maximum_time_since_first_ms,
+        app_bundle_root,
     )
     if not events:
         raise RuntimeError(
@@ -549,6 +626,13 @@ def process_virtual_memory_export(
         ),
         "major_faults_with_app_frame": sum(
             bool(event["first_app_frame"]) for event in major
+        ),
+        "major_faults_with_bundle_owned_faulting_binary": sum(
+            bool(event["faulting_binary_is_bundle_owned"]) for event in major
+        ),
+        "ordering_candidate_groups": len(summaries),
+        "ordering_candidate_faults": sum(
+            int(summary["major_fault_count"]) for summary in summaries
         ),
         "classification": {
             "Major": sorted(MAJOR_OPERATIONS),

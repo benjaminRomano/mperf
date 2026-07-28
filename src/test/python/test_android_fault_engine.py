@@ -7,6 +7,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import pandas as pd
+
 
 ENGINE = (
     Path(__file__).parents[2]
@@ -21,6 +23,14 @@ assert SPEC is not None and SPEC.loader is not None
 faults = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = faults
 SPEC.loader.exec_module(faults)
+sys.modules["faults"] = faults
+
+REPORT = ENGINE.parent / "report.py"
+REPORT_SPEC = importlib.util.spec_from_file_location("android_fault_report", REPORT)
+assert REPORT_SPEC is not None and REPORT_SPEC.loader is not None
+report = importlib.util.module_from_spec(REPORT_SPEC)
+sys.modules[REPORT_SPEC.name] = report
+REPORT_SPEC.loader.exec_module(report)
 
 
 def fake_dex() -> bytes:
@@ -121,6 +131,97 @@ class VdexTests(unittest.TestCase):
     def test_unknown_vdex_version_is_not_guessed(self):
         analysis = self.parse(b"vdex999\0" + bytes(128), None)
         self.assertIsNone(analysis)
+
+    def test_malformed_section_table_is_rejected(self):
+        data = bytearray(sectioned_vdex([0xAABBCCDD]))
+        # Make the DEX section overlap the checksum section.
+        checksum_offset = struct.unpack_from("<I", data, 16)[0]
+        struct.pack_into("<I", data, 28, checksum_offset)
+        self.assertIsNone(self.parse(bytes(data), [("classes.dex", 0xAABBCCDD)]))
+
+
+class VdexReportTests(unittest.TestCase):
+    def capture(self):
+        file_name = "/data/app/~~hash/com.example.app-a/oat/arm64/base.vdex"
+        faults_frame = pd.DataFrame(
+            [
+                {
+                    "file_name": file_name,
+                    "page_index": page,
+                    "zip_entry_name": dex_name,
+                    "section_page": page - base,
+                    "unit_key": f"oat/arm64/base.vdex::{dex_name}",
+                    "source_label": f"oat/arm64/base.vdex › {dex_name}",
+                    "ts": index,
+                    "elapsed_ms": float(index),
+                    "is_major": index % 2 == 0,
+                    "event_type": "major" if index % 2 == 0 else "minor",
+                    "thread_name": "main",
+                    "offset": page * 4096,
+                    "category": "dex",
+                }
+                for index, (page, base, dex_name) in enumerate(
+                    [
+                        (10, 10, "classes.dex"),
+                        (12, 10, "classes.dex"),
+                        (14, 10, "classes.dex"),
+                        (30, 30, "classes2.dex"),
+                        (31, 30, "classes2.dex"),
+                        (35, 30, "classes2.dex"),
+                    ]
+                )
+            ]
+        )
+        boundaries = pd.DataFrame(
+            [
+                {
+                    "file_name": file_name,
+                    "dex_name": "classes.dex",
+                    "page_index": 10,
+                },
+                {
+                    "file_name": file_name,
+                    "dex_name": "classes2.dex",
+                    "page_index": 30,
+                },
+            ]
+        )
+        return report.Capture(
+            path=Path("capture"),
+            label="capture",
+            metadata={"page_size": 4096, "package": "com.example.app"},
+            all_faults=pd.DataFrame(),
+            mapped_faults=faults_frame,
+            page_cache=pd.DataFrame(),
+            residency=pd.DataFrame(),
+            vdex_boundaries=boundaries,
+        )
+
+    def test_default_vdex_view_keeps_the_complete_file(self):
+        views = report.sequence_views(self.capture())
+        self.assertEqual("vdex-file::oat/arm64/base.vdex", views[0].key)
+        self.assertEqual(6, len(views[0].faults))
+        self.assertEqual("Entire VDEX file", views[0].faults["page_basis"].iloc[0])
+
+    def test_verified_dex_boundaries_are_red_labeled_lines(self):
+        figure = report.sequence_figure(self.capture())
+        shapes = list(figure.layout.shapes)
+        self.assertEqual(
+            ["classes.dex", "classes2.dex"], [s.label.text for s in shapes]
+        )
+        self.assertEqual(["#DC2626", "#DC2626"], [s.line.color for s in shapes])
+        self.assertEqual([10, 30], [s.y0 for s in shapes])
+
+
+class CaptureMetadataTests(unittest.TestCase):
+    def test_malformed_capture_metadata_is_rejected_before_querying_trace(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "capture_metadata.json").write_text('{"schema_version": 4}')
+            with mock.patch.object(faults, "query_startup") as query:
+                with self.assertRaisesRegex(RuntimeError, "predates"):
+                    faults.process_capture(root)
+            query.assert_not_called()
 
 
 class CacheAttributionTests(unittest.TestCase):

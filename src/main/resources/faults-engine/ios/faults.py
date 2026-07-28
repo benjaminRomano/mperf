@@ -8,9 +8,9 @@ import math
 import os
 import plistlib
 import shutil
+import subprocess
 import sys
 import tempfile
-import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -42,6 +42,8 @@ from ios_fault_visualizer.devices import (
     wait_for_pressure,
 )
 from ios_fault_visualizer.instruments import (
+    Recording,
+    abort_recording,
     export_trace,
     finish_recording,
     start_recording,
@@ -55,6 +57,36 @@ from ios_fault_visualizer.subprocesses import run
 ROOT = Path(__file__).resolve().parent
 CAPTURE_MARKER = ".ios-fault-visualizer-capture"
 CAPTURE_MARKER_CONTENT = "ios-fault-visualizer capture v1\n"
+
+
+def validate_recording_window(
+    settle_seconds: float, time_limit_seconds: Optional[int]
+) -> None:
+    if settle_seconds <= 0:
+        raise ValueError("--settle-seconds must be positive")
+    if time_limit_seconds is not None:
+        if time_limit_seconds <= 0:
+            raise ValueError("--time-limit must be positive")
+        minimum = math.ceil(settle_seconds)
+        if time_limit_seconds < minimum:
+            raise ValueError(
+                "--time-limit must be at least ceil(--settle-seconds) "
+                f"({minimum} seconds)"
+            )
+
+
+def wait_for_post_launch_window(recording: Recording, settle_seconds: float) -> None:
+    """Require xctrace to remain alive for the complete post-launch window."""
+    try:
+        return_code = recording.process.wait(timeout=settle_seconds)
+    except subprocess.TimeoutExpired:
+        return
+    detail = recording.stderr_path.read_text(errors="replace").strip()
+    raise RuntimeError(
+        "xctrace ended before the requested post-launch analysis window "
+        f"completed (exit {return_code}, requested {settle_seconds}s)"
+        + (f"\n{detail}" if detail else "")
+    )
 
 
 def validate_output_directory(path: Path, overwrite: bool) -> Path:
@@ -352,7 +384,77 @@ def should_validate_prelaunch_cache(
     )
 
 
+def validate_prelaunch_cache(
+    *,
+    installed_bundle: Path,
+    cache_metadata: dict[str, Any],
+    residency_rows: list[Residency],
+    require_cold_cache: bool,
+    residency_threshold: float,
+    allow_unconfirmed_cache: bool,
+) -> list[Path]:
+    executable_relative = cache_metadata.get("app_executable_relative_path")
+    installed_executable = (
+        installed_bundle / str(executable_relative)
+        if executable_relative
+        else app_executable(installed_bundle)
+    )
+    prelaunch_paths = app_bundle_files(
+        installed_bundle,
+        installed_executable,
+    )
+    prelaunch_errors: list[dict[str, str]] = []
+    prelaunch_inventory = file_inventory(installed_bundle, prelaunch_paths)
+    prelaunch_rows = measure_residency(
+        prelaunch_paths,
+        "immediately_before_target_launch",
+        prelaunch_errors,
+    )
+    residency_rows.extend(prelaunch_rows)
+    prelaunch = summarize_residency(prelaunch_rows, "immediately_before_target_launch")
+    expected_fingerprint = (
+        cache_metadata.get("inventory_after", {})
+        if isinstance(cache_metadata.get("inventory_after"), dict)
+        else {}
+    )
+    complete_coverage = (
+        not prelaunch_errors
+        and expected_fingerprint.get("manifest_sha256")
+        == prelaunch_inventory["manifest_sha256"]
+        and prelaunch["files"] == prelaunch_inventory["regular_file_count"]
+    )
+    fraction = prelaunch["resident_fraction"]
+    allowed_fraction = 0.0 if require_cold_cache else residency_threshold
+    accepted = (
+        complete_coverage
+        and fraction is not None
+        and float(fraction) <= allowed_fraction
+    )
+    cache_metadata["inventory_immediately_before_launch"] = prelaunch_inventory
+    cache_metadata["residency_immediately_before_launch"] = prelaunch
+    cache_metadata["prelaunch_measurement_errors"] = prelaunch_errors
+    if accepted:
+        cache_metadata["confidence"] = (
+            "confirmed-evicted"
+            if prelaunch["resident_pages"] == 0
+            else "threshold-met-partially-resident"
+        )
+    else:
+        cache_metadata["confidence"] = "unconfirmed-prelaunch"
+        if not allow_unconfirmed_cache:
+            fraction_text = (
+                f"{float(fraction):.1%}" if fraction is not None else "unknown"
+            )
+            raise RuntimeError(
+                "App-bundle cache residency changed before launch "
+                f"({fraction_text} resident, complete coverage: "
+                f"{complete_coverage}); refusing the capture."
+            )
+    return prelaunch_paths
+
+
 def capture(args: argparse.Namespace) -> Path:
+    validate_recording_window(args.settle_seconds, args.time_limit)
     requested_output = args.output.expanduser()
     if not requested_output.is_absolute():
         requested_output = Path.cwd() / requested_output
@@ -385,6 +487,9 @@ def capture(args: argparse.Namespace) -> Path:
             installed_bundle = simulator_app_container(target, bundle_id)
             _, installed_binary = _app_identity(installed_bundle)
             app_binary_name = app_binary_name or installed_binary
+        app_bundle_root = (
+            str(installed_bundle.resolve()) if installed_bundle is not None else ""
+        )
         if not app_binary_name:
             raise RuntimeError(
                 "--app-binary-name is required for an already-installed "
@@ -433,80 +538,21 @@ def capture(args: argparse.Namespace) -> Path:
                 cache_metadata,
             ):
                 assert installed_bundle is not None
-                executable_relative = cache_metadata.get("app_executable_relative_path")
-                installed_executable = (
-                    installed_bundle / str(executable_relative)
-                    if executable_relative
-                    else app_executable(installed_bundle)
+                measured_paths = validate_prelaunch_cache(
+                    installed_bundle=installed_bundle,
+                    cache_metadata=cache_metadata,
+                    residency_rows=residency_rows,
+                    require_cold_cache=args.require_cold_cache,
+                    residency_threshold=args.residency_threshold,
+                    allow_unconfirmed_cache=args.allow_unconfirmed_cache,
                 )
-                prelaunch_paths = app_bundle_files(
-                    installed_bundle,
-                    installed_executable,
-                )
-                prelaunch_errors: list[dict[str, str]] = []
-                prelaunch_inventory = file_inventory(installed_bundle, prelaunch_paths)
-                prelaunch_rows = measure_residency(
-                    prelaunch_paths,
-                    "immediately_before_target_launch",
-                    prelaunch_errors,
-                )
-                residency_rows.extend(prelaunch_rows)
-                prelaunch = summarize_residency(
-                    prelaunch_rows, "immediately_before_target_launch"
-                )
-                expected_fingerprint = (
-                    cache_metadata.get("inventory_after", {})
-                    if isinstance(cache_metadata.get("inventory_after"), dict)
-                    else {}
-                )
-                complete_coverage = (
-                    not prelaunch_errors
-                    and expected_fingerprint.get("manifest_sha256")
-                    == prelaunch_inventory["manifest_sha256"]
-                    and prelaunch["files"] == prelaunch_inventory["regular_file_count"]
-                )
-                fraction = prelaunch["resident_fraction"]
-                allowed_fraction = (
-                    0.0 if args.require_cold_cache else args.residency_threshold
-                )
-                accepted = (
-                    complete_coverage
-                    and fraction is not None
-                    and float(fraction) <= allowed_fraction
-                )
-                cache_metadata["inventory_immediately_before_launch"] = (
-                    prelaunch_inventory
-                )
-                cache_metadata["residency_immediately_before_launch"] = prelaunch
-                cache_metadata["prelaunch_measurement_errors"] = prelaunch_errors
-                if accepted:
-                    cache_metadata["confidence"] = (
-                        "confirmed-evicted"
-                        if prelaunch["resident_pages"] == 0
-                        else "threshold-met-partially-resident"
-                    )
-                else:
-                    cache_metadata["confidence"] = "unconfirmed-prelaunch"
-                    if not args.allow_unconfirmed_cache:
-                        fraction_text = (
-                            f"{float(fraction):.1%}"
-                            if fraction is not None
-                            else "unknown"
-                        )
-                        raise RuntimeError(
-                            "App-bundle cache residency changed before launch "
-                            f"({fraction_text} resident, complete coverage: "
-                            f"{complete_coverage}); refusing the capture."
-                        )
-                measured_paths = prelaunch_paths
-
             target_pid = launch_app(
                 target,
                 bundle_id,
                 args.app_argument,
                 log_directory=working,
             )
-            time.sleep(args.settle_seconds)
+            wait_for_post_launch_window(recording, args.settle_seconds)
             if target.is_simulator and measured_paths:
                 residency_rows.extend(
                     measure_residency(
@@ -514,7 +560,10 @@ def capture(args: argparse.Namespace) -> Path:
                         "after_target_launch",
                     )
                 )
-        finally:
+        except BaseException:
+            abort_recording(recording)
+            raise
+        else:
             finish_recording(recording, time_limit + 45)
         if target_pid is None:
             raise RuntimeError("Target launch did not return a PID")
@@ -527,6 +576,7 @@ def capture(args: argparse.Namespace) -> Path:
             target_pid,
             app_binary_name,
             args.settle_seconds * 1_000,
+            app_bundle_root,
         )
 
         xctrace_warnings = [
@@ -538,6 +588,7 @@ def capture(args: argparse.Namespace) -> Path:
             "schema_version": 1,
             "bundle_id": bundle_id,
             "app_binary_name": app_binary_name,
+            "app_bundle_root": app_bundle_root,
             "target_pid": target_pid,
             "target_kind": target.kind,
             "target_identifier": target.identifier,
@@ -627,6 +678,7 @@ def reprocess(args: argparse.Namespace) -> Path:
             int(working_metadata["target_pid"]),
             str(working_metadata.get("app_binary_name") or ""),
             float(working_metadata.get("settle_seconds") or 3.0) * 1_000,
+            str(working_metadata.get("app_bundle_root") or ""),
         )
         working_metadata["stats"] = stats
         working_metadata_path.write_text(
@@ -737,6 +789,10 @@ def parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = parser().parse_args()
+    try:
+        validate_recording_window(args.settle_seconds, args.time_limit)
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
     if not 0.1 <= args.pressure_fraction <= 0.9:
         raise SystemExit("--pressure-fraction must be between 0.1 and 0.9")
     if args.pressure_hold_seconds < 1:

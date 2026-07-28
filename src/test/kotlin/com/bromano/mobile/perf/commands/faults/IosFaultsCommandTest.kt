@@ -105,6 +105,92 @@ class IosFaultsCommandTest {
         assertTrue(result.output.contains("cannot be combined"))
         assertTrue(shell.runCommandCalls.isEmpty())
     }
+
+    @Test
+    fun `explicit app does not inherit configured bundle`() {
+        val shell = FakeShell()
+        val app = temporaryDirectory.resolve("Different.app").toFile()
+        app.mkdirs()
+        val command =
+            IosFaultsCommand(
+                shell,
+                Config(ios = IosConfig(bundleIdentifier = "com.stale.config")),
+                FixedIosFaultEngine(temporaryDirectory.resolve("engine")),
+            )
+
+        val result =
+            command.test(
+                "--app ${app.toPath()} --out ${temporaryDirectory.resolve("capture")} --no-open",
+            )
+
+        assertEquals(0, result.statusCode, result.output)
+        val capture = shell.runCommandCalls[1]
+        assertTrue(capture.contains("'--app' '${app.toPath().toAbsolutePath()}'"))
+        assertTrue(!capture.contains("'--bundle-id'"))
+        assertTrue(!capture.contains("com.stale.config"))
+    }
+
+    @Test
+    fun `explicit bundle still overrides configured bundle`() {
+        val shell = FakeShell()
+        val command =
+            IosFaultsCommand(
+                shell,
+                Config(ios = IosConfig(bundleIdentifier = "com.stale.config")),
+                FixedIosFaultEngine(temporaryDirectory.resolve("engine")),
+            )
+
+        val result =
+            command.test(
+                "--bundle com.explicit.app --out ${temporaryDirectory.resolve("capture")} --no-open",
+            )
+
+        assertEquals(0, result.statusCode, result.output)
+        val capture = shell.runCommandCalls[1]
+        assertTrue(capture.contains("'--bundle-id' 'com.explicit.app'"))
+        assertTrue(!capture.contains("com.stale.config"))
+    }
+
+    @Test
+    fun `recording window must cover settle window`() {
+        val shell = FakeShell()
+        val command =
+            IosFaultsCommand(
+                shell,
+                Config(ios = IosConfig(bundleIdentifier = "com.example.app")),
+                FixedIosFaultEngine(temporaryDirectory.resolve("engine")),
+            )
+
+        val result =
+            command.test(
+                "--settle-seconds 2.1 --time-limit 2 " +
+                    "--out ${temporaryDirectory.resolve("capture")} --no-open",
+            )
+
+        assertEquals(1, result.statusCode)
+        assertTrue(result.output.contains("must be at least"))
+        assertTrue(shell.runCommandCalls.isEmpty())
+    }
+
+    @Test
+    fun `recording window accepts ceiling of settle window`() {
+        val shell = FakeShell()
+        val command =
+            IosFaultsCommand(
+                shell,
+                Config(ios = IosConfig(bundleIdentifier = "com.example.app")),
+                FixedIosFaultEngine(temporaryDirectory.resolve("engine")),
+            )
+
+        val result =
+            command.test(
+                "--settle-seconds 2.1 --time-limit 3 " +
+                    "--out ${temporaryDirectory.resolve("capture")} --no-open",
+            )
+
+        assertEquals(0, result.statusCode, result.output)
+        assertTrue(shell.runCommandCalls[1].contains("'--time-limit' '3'"))
+    }
 }
 
 private class FixedIosFaultEngine(

@@ -143,7 +143,7 @@ footer{margin-top:28px;color:var(--muted);font-size:12px;overflow-wrap:anywhere}
 </section>
 
 <section class="panel">
-  <div class="panel-head"><div><h2>Chronological stack chart</h2><p>Firefox-profiler-style stack columns. The root is at the bottom and the faulting frame is at the top. Each column is one fault in time order.</p></div><div class="legend">Click a column to inspect its complete stack</div></div>
+  <div class="panel-head"><div><h2>Chronological stack chart</h2><p>Firefox-profiler-style stack columns. The root is at the bottom and the faulting frame is at the top. Horizontal position is fault order, so equal-time events remain distinct; use the details view for exact time.</p></div><div class="legend">Click a column to inspect its complete stack</div></div>
   <div class="controls">
     <label><input id="minorToggle" type="checkbox" checked> Minor</label>
     <label><input id="majorToggle" type="checkbox" checked> Major</label>
@@ -163,7 +163,7 @@ footer{margin-top:28px;color:var(--muted);font-size:12px;overflow-wrap:anywhere}
 </section>
 
 <section class="panel">
-  <div class="panel-head"><div><h2 id="majorTableTitle">Major page-in code locations</h2><p id="majorTableSummary"></p></div></div>
+  <div class="panel-head"><div><h2 id="majorTableTitle">Application code-ordering candidates</h2><p id="majorTableSummary"></p></div></div>
   <div style="overflow:auto"><table><thead><tr><th>Count</th><th>First</th><th>Faulting frame</th><th>Binary</th><th>First app frame</th><th>Example address</th></tr></thead><tbody id="majorTable"></tbody></table></div>
 </section>
 
@@ -181,7 +181,7 @@ const DATA=__REPORT_DATA__;
 const E={index:0,time:1,address:2,hex:3,major:4,operation:5,thread:6,tid:7,frame:8,binary:9,app:10,duration:11,stack:12};
 const BLUE="#2563eb", ORANGE="#f59e0b", INK="#172033", MUTED="#65718a", GRID="#e2e8f0";
 const fullRangeEnd=DATA.events.reduce((maximum,event)=>Math.max(maximum,event[E.time]),1);
-let rangeStart=0, rangeEnd=fullRangeEnd, selected=null, filtered=[];
+let rangeStart=0, rangeEnd=fullRangeEnd, orderStart=null, orderEnd=null, selected=null, filtered=[];
 const tooltip=document.getElementById("tooltip");
 const fmt=n=>new Intl.NumberFormat().format(n);
 const escapeHtml=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;"}[c]));
@@ -203,14 +203,15 @@ function resizeCanvas(canvas){
 }
 function visibleEvents(){
  const minor=document.getElementById("minorToggle").checked,major=document.getElementById("majorToggle").checked,q=document.getElementById("search").value.trim().toLowerCase();
- filtered=DATA.events.filter((e,i)=>e[E.time]>=rangeStart&&e[E.time]<=rangeEnd&&(e[E.major]?major:minor)&&(!q||searchTexts[i].includes(q)));
- document.getElementById("rangeLabel").textContent=`${rangeStart.toFixed(1)}–${rangeEnd.toFixed(1)} ms · ${fmt(filtered.length)} faults`;
+ filtered=DATA.events.filter((e,i)=>e[E.time]>=rangeStart&&e[E.time]<=rangeEnd&&(orderStart===null||e[E.index]>=orderStart&&e[E.index]<=orderEnd)&&(e[E.major]?major:minor)&&(!q||searchTexts[i].includes(q)));
+ const scope=orderStart===null?`${rangeStart.toFixed(1)}–${rangeEnd.toFixed(1)} ms`:`faults #${orderStart}–#${orderEnd}`;
+ document.getElementById("rangeLabel").textContent=`${scope} · ${fmt(filtered.length)} faults`;
  document.getElementById("listSummary").textContent=`${fmt(filtered.length)} matching events in chronological order.`;
  return filtered;
 }
 function tickHex(value){return "0x"+Math.round(value).toString(16)}
 function plotlyTrace(events,name,color,symbol,opacity){
- return {type:"scattergl",mode:"markers",name,x:events.map(e=>e[E.time]),y:events.map(e=>e[E.address]),customdata:events.map(e=>[e[E.hex],e[E.operation],e[E.frame]||"unresolved",e[E.index]]),marker:{color,size:symbol==="diamond"?9:5,symbol,opacity,line:symbol==="diamond"?{color:"#92400e",width:1}:undefined},hovertemplate:`<b>${name}</b> · %{customdata[1]}<br>%{x:.3f} ms · %{customdata[0]}<br>%{customdata[2]}<extra></extra>`};
+ return {type:"scatter",mode:"markers",name,x:events.map(e=>e[E.time]),y:events.map(e=>e[E.address]),customdata:events.map(e=>[e[E.hex],e[E.operation],e[E.frame]||"unresolved",e[E.index]]),marker:{color,size:symbol==="diamond"?9:5,symbol,opacity,line:symbol==="diamond"?{color:"#92400e",width:1}:undefined},hovertemplate:`<b>${name}</b> · %{customdata[1]}<br>%{x:.3f} ms · %{customdata[0]}<br>%{customdata[2]}<extra></extra>`};
 }
 function drawAddress(){
  const chart=document.getElementById("addressChart");
@@ -225,16 +226,16 @@ function drawAddress(){
 function colorFor(id){let x=(id+1)*2654435761>>>0;return `hsl(${x%360} 52% ${44+(x%13)}%)`}
 function drawStacks(){
  const canvas=document.getElementById("stackChart"),{ctx,w,h,dpr}=resizeCanvas(canvas);ctx.clearRect(0,0,w,h);
- const events=filtered.length?filtered:visibleEvents(),p={l:54*dpr,r:18*dpr,t:18*dpr,b:42*dpr},pw=w-p.l-p.r,ph=h-p.t-p.b,row=13*dpr;
+ const events=filtered.length?filtered:visibleEvents(),p={l:54*dpr,r:18*dpr,t:18*dpr,b:42*dpr},pw=w-p.l-p.r,ph=h-p.t-p.b;
  ctx.fillStyle="#fff";ctx.fillRect(0,0,w,h);ctx.strokeStyle=GRID;ctx.fillStyle=MUTED;ctx.font=`${12*dpr}px ui-monospace`;
- for(let i=0;i<=6;i++){const px=p.l+pw*i/6,t=rangeStart+(rangeEnd-rangeStart)*i/6;ctx.beginPath();ctx.moveTo(px,p.t);ctx.lineTo(px,p.t+ph);ctx.stroke();ctx.textAlign="center";ctx.fillText(t.toFixed(0),px,h-15*dpr)}
- let maxDepth=0;
- for(let i=0;i<events.length;i++){const e=events[i],stack=DATA.stacks[e[E.stack]].slice().reverse(),x=p.l+(e[E.time]-rangeStart)/(rangeEnd-rangeStart)*pw,next=i+1<events.length?p.l+(events[i+1][E.time]-rangeStart)/(rangeEnd-rangeStart)*pw:x+1*dpr,width=Math.max(1*dpr,Math.min(10*dpr,next-x));maxDepth=Math.max(maxDepth,stack.length);
-   for(let depth=0;depth<stack.length&&depth*row<ph;depth++){const y=p.t+ph-(depth+1)*row;ctx.fillStyle=colorFor(stack[depth]);ctx.globalAlpha=.8;ctx.fillRect(x,y,width,row-.5*dpr)}
+ for(let i=0;i<=6;i++){const px=p.l+pw*i/6,event=events[Math.min(events.length-1,Math.round((events.length-1)*i/6))];ctx.beginPath();ctx.moveTo(px,p.t);ctx.lineTo(px,p.t+ph);ctx.stroke();ctx.textAlign="center";ctx.fillText(event?`#${event[E.index]}`:"—",px,h-15*dpr)}
+ const maxDepth=events.reduce((maximum,e)=>Math.max(maximum,DATA.stacks[e[E.stack]].length),1),row=Math.min(13*dpr,ph/maxDepth),step=pw/Math.max(events.length,1),width=Math.max(1*dpr,Math.min(10*dpr,step));
+ for(let i=0;i<events.length;i++){const e=events[i],stack=DATA.stacks[e[E.stack]].slice().reverse(),x=p.l+i*step;
+   for(let depth=0;depth<stack.length;depth++){const y=p.t+ph-(depth+1)*row;ctx.fillStyle=colorFor(stack[depth]);ctx.globalAlpha=.8;ctx.fillRect(x,y,width,Math.max(.5*dpr,row-.5*dpr))}
    ctx.globalAlpha=1;ctx.fillStyle=e[E.major]?ORANGE:BLUE;ctx.fillRect(x,p.t,Math.max(width,1*dpr),2*dpr);
  }
  ctx.fillStyle=MUTED;ctx.textAlign="right";ctx.fillText("root",p.l-8*dpr,p.t+ph-row/2);ctx.fillText("leaf",p.l-8*dpr,Math.max(p.t+row/2,p.t+ph-Math.min(maxDepth*row,ph)+row/2));
- canvas._chart={events,p,pw};
+ canvas._chart={events,p,pw,step};
 }
 function renderList(reset=false){
  const list=document.getElementById("faultList"),rows=document.getElementById("faultRows"),spacer=document.getElementById("faultSpacer"),rowH=64;
@@ -249,21 +250,21 @@ function selectEvent(event,scroll=false){
  if(scroll){const pos=filtered.indexOf(event);if(pos>=0)document.getElementById("faultList").scrollTop=Math.max(0,pos*64-160)}
  renderList();
 }
-function nearestByTime(events,time){let best=null,d=Infinity;for(const e of events){const n=Math.abs(e[E.time]-time);if(n<d){best=e;d=n}}return best}
+function stackEventAtOffset(canvas,offsetX){const chart=canvas._chart;if(!chart||!chart.events.length)return null;const ratio=Math.max(0,Math.min(.999999,(offsetX-54)/(canvas.clientWidth-54-18)));return chart.events[Math.floor(ratio*chart.events.length)]}
 function attachStackCanvas(canvas){
  let down=null;
  canvas.addEventListener("pointerdown",e=>down=e.offsetX);
- canvas.addEventListener("pointerup",e=>{if(down===null)return;const width=canvas.clientWidth,left=54,right=18,a=Math.max(left,Math.min(width-right,down)),b=Math.max(left,Math.min(width-right,e.offsetX));if(Math.abs(b-a)>8){const oldStart=rangeStart,span=rangeEnd-rangeStart,usable=width-left-right;rangeStart=oldStart+(Math.min(a,b)-left)/usable*span;rangeEnd=oldStart+(Math.max(a,b)-left)/usable*span;update(true)}else{const chart=canvas._chart;if(chart&&chart.events.length){const time=rangeStart+(e.offsetX-left)/(width-left-right)*(rangeEnd-rangeStart);selectEvent(nearestByTime(chart.events,time),true)}}down=null});
+ canvas.addEventListener("pointerup",e=>{if(down===null)return;const a=stackEventAtOffset(canvas,down),b=stackEventAtOffset(canvas,e.offsetX);if(Math.abs(e.offsetX-down)>8&&a&&b){orderStart=Math.min(a[E.index],b[E.index]);orderEnd=Math.max(a[E.index],b[E.index]);update(true)}else{const event=stackEventAtOffset(canvas,e.offsetX);if(event)selectEvent(event,true)}down=null});
  canvas.addEventListener("dblclick",()=>resetZoom());
- canvas.addEventListener("pointermove",e=>{const chart=canvas._chart;if(!chart||!chart.events.length)return;const left=54,right=18,time=rangeStart+(e.offsetX-left)/(canvas.clientWidth-left-right)*(rangeEnd-rangeStart),event=nearestByTime(chart.events,time);if(!event)return;tooltip.style.display="block";tooltip.style.left=`${Math.min(innerWidth-450,e.clientX+14)}px`;tooltip.style.top=`${Math.min(innerHeight-110,e.clientY+14)}px`;tooltip.innerHTML=`<strong>${event[E.major]?"Major":"Minor"} · ${escapeHtml(event[E.operation])}</strong><br>${event[E.time].toFixed(3)} ms · <span class=mono>${event[E.hex]}</span><br>${escapeHtml(event[E.frame]||"unresolved")}`});
+ canvas.addEventListener("pointermove",e=>{const event=stackEventAtOffset(canvas,e.offsetX);if(!event)return;tooltip.style.display="block";tooltip.style.left=`${Math.min(innerWidth-450,e.clientX+14)}px`;tooltip.style.top=`${Math.min(innerHeight-110,e.clientY+14)}px`;tooltip.innerHTML=`<strong>Fault #${event[E.index]} · ${event[E.major]?"Major":"Minor"} · ${escapeHtml(event[E.operation])}</strong><br>${event[E.time].toFixed(3)} ms · <span class=mono>${event[E.hex]}</span><br>${escapeHtml(event[E.frame]||"unresolved")}`});
  canvas.addEventListener("pointerleave",()=>tooltip.style.display="none");
 }
-function resetZoom(){rangeStart=0;rangeEnd=fullRangeEnd;update(true)}
+function resetZoom(){rangeStart=0;rangeEnd=fullRangeEnd;orderStart=null;orderEnd=null;update(true)}
 function update(resetList=false){visibleEvents();drawAddress();drawStacks();renderList(resetList);if(selected&&!filtered.includes(selected))selected=null;if(!selected&&filtered.length)selectEvent(filtered.find(e=>e[E.major])||filtered[0]);if(!filtered.length)document.getElementById("detail").innerHTML="<p>No faults match the current filters.</p>"}
-function renderMajorTable(){const major=(DATA.stats.class_counts||{}).Major||0;document.getElementById("majorTableTitle").textContent=`Major page-in code locations · ${fmt(major)} events`;document.getElementById("majorTableSummary").textContent=`Major-only view grouped by exact faulting frame, ordered by event count and first occurrence. All ${fmt(DATA.stats.event_count)} analyzed faults remain available in the timeline and ordered list.`;document.getElementById("majorTable").innerHTML=DATA.majorSummary.map(row=>`<tr><td>${fmt(Number(row.major_fault_count))}</td><td>${Number(row.first_fault_ms).toFixed(3)} ms</td><td class=frame-cell>${escapeHtml(row.faulting_frame||row.first_symbolicated_frame||"unresolved")}</td><td>${escapeHtml(row.faulting_binary||row.first_symbolicated_binary||"—")}</td><td class=frame-cell>${escapeHtml(row.first_app_frame||"—")}</td><td class=mono>${escapeHtml(row.example_address_hex)}</td></tr>`).join("")||"<tr><td colspan=6>No major page-ins were captured.</td></tr>"}
+function renderMajorTable(){const candidateFaults=DATA.majorSummary.reduce((sum,row)=>sum+Number(row.major_fault_count),0);document.getElementById("majorTableTitle").textContent=`Application code-ordering candidates · ${fmt(candidateFaults)} faults`;document.getElementById("majorTableSummary").textContent=`Only major events whose actual faulting binary is inside the captured app bundle are included. Generic entry points and unresolved frames are excluded. Candidates are ranked by count, then first-touch time; all ${fmt(DATA.stats.event_count)} analyzed faults remain in the timeline and ordered list.`;document.getElementById("majorTable").innerHTML=DATA.majorSummary.map(row=>`<tr><td>${fmt(Number(row.major_fault_count))}</td><td>${Number(row.first_fault_ms).toFixed(3)} ms</td><td class=frame-cell>${escapeHtml(row.faulting_frame)}</td><td>${escapeHtml(row.faulting_binary)}</td><td class=frame-cell>${escapeHtml(row.first_app_frame||"—")}</td><td class=mono>${escapeHtml(row.example_address_hex)}</td></tr>`).join("")||"<tr><td colspan=6>No verified app-owned code-ordering candidates were captured.</td></tr>"}
 function renderQuality(){const m=DATA.metadata,s=DATA.stats,cache=m.cache||{},sim=m.target_kind==="simulator",confidence=String(cache.confidence||""),warnings=m.capture_quality_warnings||[];let cacheText=confidence==="confirmed-evicted"?"Complete app-bundle residency checks found zero resident pages immediately before launch.":confidence==="threshold-met-partially-resident"?"Complete app-bundle checks met the configured threshold, but some pages remained resident; treat this as a partially warm capture.":confidence.startsWith("best-effort")?"The physical-device procedure is best-effort. Stock iOS does not expose a supported global page-cache flush or residency API.":confidence==="none"?"No page-cache preparation was requested.":"Cache eviction was attempted but could not be independently confirmed.";
  const warningText=warnings.length?`<li>${fmt(warnings.length)} xctrace warning line(s) were recorded in capture metadata; review them before relying on symbolication.</li>`:"";
- document.getElementById("quality").innerHTML=`<p class=notice><strong>${escapeHtml(cache.procedure||"Cache procedure not recorded")}:</strong> ${escapeHtml(cacheText)}</p><ul><li>${escapeHtml(s.classification_note)}</li><li>${sim?"Simulator faults are macOS host VM/cache behavior and are not equivalent to physical-device storage page-ins.":"Physical-device Virtual Memory Trace was used; file-backed page-ins are the closest available Instruments signal, but the major/minor names remain analytical buckets."}</li><li>${fmt(s.major_faults_with_stack||0)} of ${fmt((s.class_counts||{}).Major||0)} major page-ins include a captured stack; ${fmt(s.major_faults_with_app_frame||0)} reach an app frame.</li>${warningText}</ul>`}
+ document.getElementById("quality").innerHTML=`<p class=notice><strong>${escapeHtml(cache.procedure||"Cache procedure not recorded")}:</strong> ${escapeHtml(cacheText)}</p><ul><li>${escapeHtml(s.classification_note)}</li><li>${sim?"Simulator faults are macOS host VM/cache behavior and are not equivalent to physical-device storage page-ins.":"Physical-device Virtual Memory Trace was used; file-backed page-ins are the closest available Instruments signal, but the major/minor names remain analytical buckets."}</li><li>${fmt(s.major_faults_with_stack||0)} of ${fmt((s.class_counts||{}).Major||0)} major page-ins include a captured stack; ${fmt(s.major_faults_with_app_frame||0)} reach an app frame, and ${fmt(s.major_faults_with_bundle_owned_faulting_binary||0)} have a verified app-bundle faulting binary.</li>${warningText}</ul>`}
 setHeader();renderMajorTable();renderQuality();attachStackCanvas(document.getElementById("stackChart"));
 document.getElementById("minorToggle").onchange=()=>update(true);document.getElementById("majorToggle").onchange=()=>update(true);document.getElementById("search").oninput=()=>update(true);document.getElementById("resetZoom").onclick=resetZoom;document.getElementById("faultList").onscroll=()=>renderList();addEventListener("resize",()=>{drawAddress();drawStacks()});update();
 </script>
