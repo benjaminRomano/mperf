@@ -46,8 +46,8 @@ dependencies {
     implementation(platform("org.jetbrains.kotlin:kotlin-bom:2.4.0"))
     implementation("com.github.ajalt.clikt:clikt:5.1.0")
     implementation("com.github.ajalt.clikt:clikt-markdown:5.1.0")
-    implementation("com.google.protobuf:protobuf-kotlin:4.35.1")
-    implementation("com.google.protobuf:protobuf-java:4.35.1")
+    implementation("com.google.protobuf:protobuf-kotlin:4.36.0")
+    implementation("com.google.protobuf:protobuf-java:4.36.0")
     implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.22.1")
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.22.1")
     implementation("io.ktor:ktor-client-core:3.5.1")
@@ -71,7 +71,7 @@ tasks.test { useJUnitPlatform() }
 kotlin { jvmToolchain(21) }
 
 protobuf {
-    protoc { artifact = "com.google.protobuf:protoc:4.35.1" }
+    protoc { artifact = "com.google.protobuf:protoc:4.36.0" }
     generateProtoTasks { all().forEach { it.builtins { id("kotlin") } } }
 }
 
