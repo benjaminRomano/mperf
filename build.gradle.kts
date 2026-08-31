@@ -48,7 +48,7 @@ dependencies {
     implementation("com.github.ajalt.clikt:clikt-markdown:5.1.0")
     implementation("com.google.protobuf:protobuf-kotlin:4.35.1")
     implementation("com.google.protobuf:protobuf-java:4.35.1")
-    implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.22.1")
+    implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.22.2")
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.22.1")
     implementation("io.ktor:ktor-client-core:3.5.1")
     implementation("io.ktor:ktor-client-java:3.5.1")
