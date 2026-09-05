@@ -48,12 +48,10 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      - name: Setup uv
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-        with:
-          version: "0.7.19"
-          python-version: "3.13"
-          enable-cache: true
+      - name: Verify runner tools
+        run: |
+          node --version
+          python3 --version
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
