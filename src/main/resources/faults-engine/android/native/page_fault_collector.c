@@ -26,12 +26,13 @@
 #include <unistd.h>
 
 #include "cpu_list.h"
+#include "apk_cache_reclaim.h"
 
 #define RING_DATA_PAGES 256
 #define MAX_SAMPLES 500000
-#define MAX_MAPPING_SAMPLES 50000
+#define MAX_MAPPING_SAMPLES 100000
 #define MAX_MAPPING_PATH 512
-#define MAX_CALLCHAIN_ENTRIES 2000000
+#define MAX_CALLCHAIN_ENTRIES 4000000
 #define PERF_RECORD_LOST_SAMPLES_TYPE 13
 #define PERF_FORMAT_LOST_FLAG (1ULL << 4)
 
@@ -316,8 +317,9 @@ static void usage(const char *program) {
           "Usage: %s --output FILE --mappings-output FILE "
           "[--callchains-output FILE] [--duration-ms N]\n"
           "       %s --residency FILE [FILE ...]\n"
-          "       %s --evict FILE [FILE ...]\n",
-          program, program, program);
+          "       %s --evict FILE [FILE ...]\n"
+          "       %s --reclaim-mapped-apks APK [APK ...]\n",
+          program, program, program, program);
 }
 
 static int read_online_cpus(int **cpus_out, size_t *count_out,
@@ -453,6 +455,9 @@ static int report_residency(int file_count, char **paths) {
 }
 
 int main(int argc, char **argv) {
+  if (argc >= 3 && strcmp(argv[1], "--reclaim-mapped-apks") == 0) {
+    return reclaim_mapped_apks(argc - 2, argv + 2);
+  }
   if (argc >= 3 && strcmp(argv[1], "--residency") == 0) {
     return report_residency(argc - 2, argv + 2);
   }
@@ -493,6 +498,9 @@ int main(int argc, char **argv) {
     usage(argv[0]);
     return EXIT_FAILURE;
   }
+
+  fprintf(stdout, "STARTING pid=%d\n", getpid());
+  fflush(stdout);
 
   const long page_size = sysconf(_SC_PAGESIZE);
   int *online_cpus = NULL;
@@ -711,6 +719,15 @@ int main(int argc, char **argv) {
             "frame_index,ip\n");
     for (size_t sample_index = 0; sample_index < sample_count; ++sample_index) {
       const struct fault_sample *sample = &samples[sample_index];
+      /* An empty PERF_SAMPLE_CALLCHAIN is valid (e.g. recursion protection).
+       * Keep an explicit sentinel so absence isn't confused with a lost row. */
+      if (sample->callchain_count == 0) {
+        fprintf(callchains_output,
+                "%zu,%" PRIu64 ",%s,%u,%u,0x%" PRIx64 ",-1,0x0\n",
+                sample_index, sample->timestamp_ns,
+                sample->kind == FAULT_MAJOR ? "major" : "minor", sample->pid,
+                sample->tid, sample->address);
+      }
       for (uint32_t frame_index = 0;
            frame_index < sample->callchain_count; ++frame_index) {
         const uint64_t callchain_ip =
@@ -743,10 +760,19 @@ int main(int argc, char **argv) {
           "capture_start_ns=%" PRIu64 " capture_end_ns=%" PRIu64
           " samples=%zu mappings=%zu lost=%" PRIu64 " integrity_errors=%" PRIu64
           " throttled=%" PRIu64 " callchain_entries=%zu"
-          " callchain_overflow=%" PRIu64 " lost_counter_supported=%d\n",
+          " callchain_overflow=%" PRIu64 " lost_counter_supported=%d"
+          " max_samples=%d max_mappings=%d max_callchain_entries=%d"
+          " record_buffer_bytes=%zu perf_ring_bytes=%zu\n",
           started_ns, ended_ns, sample_count, mapping_count, lost,
           integrity_errors, throttled, callchain_count, callchain_overflow,
-          lost_counter_supported ? 1 : 0);
+          lost_counter_supported ? 1 : 0, MAX_SAMPLES, MAX_MAPPING_SAMPLES,
+          callchains_output_path == NULL ? 0 : MAX_CALLCHAIN_ENTRIES,
+          MAX_SAMPLES * sizeof(*samples) +
+              MAX_MAPPING_SAMPLES * sizeof(*mappings) +
+              (callchains_output_path == NULL
+                   ? 0
+                   : MAX_CALLCHAIN_ENTRIES * sizeof(*callchains)),
+          opened_rings * ((size_t)RING_DATA_PAGES + 1) * (size_t)page_size);
 
   free(callchains);
   free(mappings);

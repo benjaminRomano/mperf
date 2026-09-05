@@ -60,7 +60,6 @@ class BundledFaultEngine(
         contents: Map<String, ByteArray>,
     ): Path {
         if (isComplete(destination, digest, contents)) {
-            ensureTraceProcessorExecutable(destination)
             return destination
         }
 
@@ -71,7 +70,6 @@ class BundledFaultEngine(
                 Files.createDirectories(output.parent)
                 Files.write(output, bytes)
             }
-            ensureTraceProcessorExecutable(staging)
             Files.writeString(staging.resolve(".complete"), "$digest\n")
 
             deleteRecursively(destination)
@@ -102,12 +100,6 @@ class BundledFaultEngine(
             val output = destination.resolve(relativePath)
             Files.isRegularFile(output, LinkOption.NOFOLLOW_LINKS) &&
                 Files.readAllBytes(output).contentEquals(expected)
-        }
-    }
-
-    private fun ensureTraceProcessorExecutable(root: Path) {
-        check(root.resolve("android/trace_processor").toFile().setExecutable(true)) {
-            "Unable to make bundled Android trace_processor executable under $root"
         }
     }
 

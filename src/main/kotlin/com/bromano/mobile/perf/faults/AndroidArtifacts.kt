@@ -23,7 +23,14 @@ internal object ZipLayout {
         val eocd = findSignatureBackwards(data, 0x06054b50, maxOf(0, data.size - 65_557))
         require(eocd >= 0 && eocd + 22 <= data.size) { "Missing ZIP end record in $path" }
         val entries = u16(data, eocd + 10)
-        val centralOffset = u32(data, eocd + 16).toInt()
+        require(u16(data, eocd + 4) == 0 && u16(data, eocd + 6) == 0 && u16(data, eocd + 8) == entries && entries != 65535) {
+            "Unsupported multi-volume or ZIP64 archive"
+        }
+        require(eocd + 22 + u16(data, eocd + 20) == data.size) { "Invalid ZIP end record bounds" }
+        val centralSize = u32(data, eocd + 12)
+        val central = u32(data, eocd + 16)
+        require(central <= eocd.toLong() - centralSize) { "Invalid ZIP central directory bounds" }
+        val centralOffset = central.toInt()
         var cursor = centralOffset
         return buildList {
             repeat(entries) {
@@ -38,13 +45,17 @@ internal object ZipLayout {
                 val nameLength = u16(data, cursor + 28)
                 val extraLength = u16(data, cursor + 30)
                 val commentLength = u16(data, cursor + 32)
-                val localOffset = u32(data, cursor + 42).toInt()
+                require(cursor.toLong() + 46 + nameLength + extraLength + commentLength <= central + centralSize) { "Truncated ZIP entry" }
+                val local = u32(data, cursor + 42)
+                require(local <= data.size - 30L) { "Invalid ZIP local offset" }
+                val localOffset = local.toInt()
                 require(localOffset + 30 <= data.size && u32(data, localOffset) == 0x04034b50L) {
                     "Invalid ZIP local header in $path at $localOffset"
                 }
                 val localNameLength = u16(data, localOffset + 26)
                 val localExtraLength = u16(data, localOffset + 28)
                 val dataOffset = localOffset.toLong() + 30 + localNameLength + localExtraLength
+                require(dataOffset <= central - compressed && method == u16(data, localOffset + 8)) { "Invalid ZIP payload range" }
                 val charset = if (flags and 0x800 != 0) Charsets.UTF_8 else Charset.forName("CP437")
                 val name = data.copyOfRange(cursor + 46, cursor + 46 + nameLength).toString(charset)
                 add(
@@ -96,11 +107,13 @@ internal object Vdex {
     ): VdexAnalysis? {
         val data = Files.readAllBytes(path)
         if (data.size < 12 || String(data, 0, 4, Charsets.US_ASCII) != "vdex") return null
-        return when (String(data, 4, 4, Charsets.US_ASCII)) {
-            "021\u0000" -> read021(data, apkDex)
-            "027\u0000" -> read027(data, apkDex)
-            else -> null
-        }
+        return runCatching {
+            when (String(data, 4, 4, Charsets.US_ASCII)) {
+                "021\u0000" -> read021(data, apkDex)
+                "027\u0000" -> read027(data, apkDex)
+                else -> null
+            }
+        }.getOrNull()
     }
 
     private fun read021(
@@ -113,9 +126,12 @@ internal object Vdex {
         val checksums = (0 until count).map { u32(data, 28 + it * 4) }
         val names = verifiedNames(checksums, apkDex)
         val section = 28 + count * 4
-        val dexSize = u32(data, section).toInt()
-        val sharedSize = u32(data, section + 4).toInt()
+        val dexSizeLong = u32(data, section)
+        val sharedSizeLong = u32(data, section + 4)
         val begin = section + 12
+        if (dexSizeLong > data.size - begin.toLong() || sharedSizeLong > data.size - begin.toLong() - dexSizeLong) return null
+        val dexSize = dexSizeLong.toInt()
+        val sharedSize = sharedSizeLong.toInt()
         val end = begin + dexSize
         if (end > data.size || end + sharedSize > data.size) return null
         val ranges = dexRanges(data, begin, end, count, names, 4, "vdex-021")
@@ -192,7 +208,9 @@ internal object Vdex {
                 if (dexStart + 36 > end) return emptyList()
                 val magic = String(data, dexStart, 4, Charsets.US_ASCII)
                 if (magic != "dex\n" && magic != "cdex") return emptyList()
-                val size = u32(data, dexStart + 32).toInt()
+                val longSize = u32(data, dexStart + 32)
+                if (longSize > end - dexStart.toLong()) return emptyList()
+                val size = longSize.toInt()
                 val dexEnd = dexStart + size
                 if (size < 112 || dexEnd > end) return emptyList()
                 add(

@@ -20,9 +20,9 @@ internal fun matchingApkForVdex(
         }.singleOrNull()
 }
 
-internal class AndroidFaultProcessor(
-    private val engineRoot: Path,
-) {
+internal class AndroidFaultProcessor {
+    private val traceProcessor by lazy { NativeTraceProcessor().materialize() }
+
     private data class MapEntry(
         val begin: Long,
         val end: Long,
@@ -139,6 +139,8 @@ internal class AndroidFaultProcessor(
             )
         writeFileSizes(output, inodes.sizes, sectionEntries)
         val fileBacked = allFaults.filter { it["mapping_kind"] == "file" }
+        AndroidBinary.enrich(output, artifacts, pageSize)
+        AndroidBinary.symbolize(output, artifacts, metadata["llvm_symbolizer"]?.toString()?.let(Path::of))
         metadata["callchain_results"] = callchainResults
         metadata["faults"] =
             mapOf(
@@ -166,8 +168,8 @@ internal class AndroidFaultProcessor(
             "Capture is incomplete: capture_status=${metadata["capture_status"]}"
         }
         val keys = listOf("lost", "integrity_errors", "throttled", "callchain_overflow")
-        val values = keys.associateWith { (metadata["collector_$it"] as? Number)?.toLong() ?: 0 }
-        require(((metadata["collector_return_code"] as? Number)?.toInt() ?: 0) == 0 && values.values.all { it == 0L }) {
+        val values = keys.associateWith { (metadata["collector_$it"] as? Number)?.toLong() }
+        require((metadata["collector_return_code"] as? Number)?.toInt() == 0 && values.values.all { it == 0L }) {
             "Collector integrity failure: $values"
         }
     }
@@ -203,8 +205,7 @@ internal class AndroidFaultProcessor(
         trace: Path,
         sql: String,
     ): List<Map<String, String>> {
-        val processor = engineRoot.resolve("android/trace_processor")
-        val result = Processes.run(listOf(processor.toString(), "-Q", sql, trace.toString()))
+        val result = Processes.run(listOf(traceProcessor.toString(), "-Q", sql, trace.toString()))
         val temporary = Files.createTempFile("mperf-trace-query-", ".csv")
         try {
             Files.writeString(temporary, result.stdout.trimStart())
@@ -559,7 +560,7 @@ internal class AndroidFaultProcessor(
                     fault["event_type"].toString(),
                 )
             val chain = chains[key]?.removeFirstOrNull() ?: error("Missing exact native callchain for fault ${fault["sequence"]}")
-            withChains++
+            if (chain.any { it !in contextNames }) withChains++
             var context = "unknown"
             var contextFrame = 0
             chain.forEachIndexed { frameIndex, rawIp ->
@@ -656,6 +657,7 @@ internal class AndroidFaultProcessor(
         Csv.write(resolvedPath, fields, outputRows)
         return mapOf(
             "faults_with_callchains" to withChains,
+            "faults_without_callchains" to faults.size - withChains,
             "callchain_frames" to outputRows.size,
             "resolved_user_frames" to resolved,
             "unresolved_user_frames" to unresolved,

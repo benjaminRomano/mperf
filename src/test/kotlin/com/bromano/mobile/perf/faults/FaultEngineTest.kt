@@ -9,7 +9,6 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.io.path.exists
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class FaultEngineTest {
@@ -24,10 +23,9 @@ class FaultEngineTest {
         val second = engine.materialize()
 
         assertEquals(first, second)
-        assertTrue(first.resolve("android/faults.py").exists())
+        assertTrue(first.resolve("shared/report.js").exists())
         assertTrue(first.resolve("android/native/page_fault_collector.c").exists())
-        assertTrue(first.resolve("android/trace_processor").toFile().canExecute())
-        assertTrue(first.resolve("ios/faults.py").exists())
+        assertTrue(first.resolve("shared/stacks.js").exists())
         assertTrue(first.resolve("ios/native/residency.c").exists())
         assertTrue(first.resolve("ios/cache-pressure/CachePressure.xcodeproj/project.pbxproj").exists())
         assertTrue(first.resolve("ios/ios_fault_visualizer/assets/plotly.min.js").exists())
@@ -36,33 +34,10 @@ class FaultEngineTest {
     }
 
     @Test
-    fun `embedded ios runner bounds commands that do not terminate`() {
-        val iosDirectory = BundledFaultEngine(temporaryDirectory).materialize().resolve("ios")
-        val script =
-            """
-            import time
-            from ios_fault_visualizer.subprocesses import run
-            started = time.monotonic()
-            result = run(["/bin/sleep", "5"], check=False, timeout=0.05)
-            assert result.returncode == -9
-            assert time.monotonic() - started < 1
-            """.trimIndent()
-
-        val process =
-            ProcessBuilder("python3", "-c", script)
-                .directory(iosDirectory.toFile())
-                .redirectErrorStream(true)
-                .start()
-        val output = process.inputStream.bufferedReader().readText()
-
-        assertEquals(0, process.waitFor(), output)
-    }
-
-    @Test
     fun `repairs a corrupted cache even when its completion marker remains`() {
         val engine = BundledFaultEngine(temporaryDirectory)
         val first = engine.materialize()
-        val report = first.resolve("android/report.py")
+        val report = first.resolve("shared/report.html")
         val expected = Files.readString(report)
         Files.writeString(report, "corrupted")
 
@@ -95,56 +70,5 @@ class FaultEngineTest {
         } finally {
             executor.shutdownNow()
         }
-    }
-
-    @Test
-    fun `android engine refuses unowned output replacement`() {
-        val androidDirectory = BundledFaultEngine(temporaryDirectory).materialize().resolve("android")
-        val outputDirectory = temporaryDirectory.resolve("sentinel-output")
-        val script =
-            """
-            import sys
-            from pathlib import Path
-            import faults
-
-            output = Path(sys.argv[1])
-            output.mkdir()
-            sentinel = output / "keep.txt"
-            sentinel.write_text("keep")
-            try:
-                faults.reset_output_directory(output, overwrite=False)
-            except RuntimeError:
-                pass
-            else:
-                raise AssertionError("non-empty output was accepted without --overwrite")
-            assert sentinel.read_text() == "keep"
-
-            (output / faults.CAPTURE_MARKER).write_text(faults.CAPTURE_MARKER_CONTENT)
-            faults.reset_output_directory(output, overwrite=True)
-            assert not sentinel.exists()
-            assert (output / faults.CAPTURE_MARKER).read_text() == faults.CAPTURE_MARKER_CONTENT
-            """.trimIndent()
-
-        val process =
-            ProcessBuilder("python3", "-c", script, outputDirectory.toString())
-                .directory(androidDirectory.toFile())
-                .redirectErrorStream(true)
-                .start()
-        val output = process.inputStream.bufferedReader().readText()
-
-        assertEquals(0, process.waitFor(), output)
-    }
-
-    @Test
-    fun `ios report contains nested scrolling`() {
-        val reporting =
-            BundledFaultEngine(temporaryDirectory)
-                .materialize()
-                .resolve("ios/ios_fault_visualizer/reporting.py")
-        val source = Files.readString(reporting)
-
-        assertTrue(source.contains(".fault-list{height:560px;overflow:auto;overscroll-behavior:contain"))
-        assertTrue(source.contains(".detail{height:560px;overflow:auto;overscroll-behavior:contain"))
-        assertFalse(source.contains(".fault-list{height:560px;overflow:auto;position:relative"))
     }
 }

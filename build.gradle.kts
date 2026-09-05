@@ -82,6 +82,42 @@ sourceSets.main {
     )
 }
 
+val faultEngineManifest = layout.projectDirectory.file("src/main/resources/faults-engine/manifest.txt")
+
+fun declaredFaultResources(): Set<String> =
+    faultEngineManifest.asFile
+        .readLines()
+        .filter(String::isNotBlank)
+        .map { "faults-engine/$it" }
+        .toSet() +
+        "faults-engine/manifest.txt"
+
+tasks.processResources {
+    // Local interpreter caches must never become shipped resources. The manifest is the complete allowlist.
+    exclude("faults-engine/**/.venv/**", "faults-engine/**/__pycache__/**", "faults-engine/**/*.pyc")
+    val declared = declaredFaultResources()
+    filesMatching("faults-engine/**") {
+        if (path !in declared) exclude()
+    }
+}
+
+val verifyFaultResources by tasks.registering {
+    group = "verification"
+    description = "Reject undeclared fault-engine resources, including local Python environments"
+    dependsOn(tasks.processResources)
+    doLast {
+        val root = tasks.processResources.get().destinationDir
+        val actual = fileTree(root.resolve("faults-engine")).files.map { it.relativeTo(root).invariantSeparatorsPath }.toSet()
+        val declared = declaredFaultResources()
+        check(actual == declared) {
+            "Fault resource mismatch: unexpected=${actual - declared}, missing=${declared - actual}"
+        }
+    }
+}
+
+tasks.named("jar") { dependsOn(verifyFaultResources) }
+tasks.named("shadowJar") { dependsOn(verifyFaultResources) }
+
 sourceSets.named("jmh") {
     resources.srcDir("src/test/resources")
 }
@@ -117,31 +153,13 @@ tasks {
         classpath = sourceSets["main"].runtimeClasspath
     }
 
-    register<Exec>("testAndroidFaultEngine") {
+    register<Exec>("testFaultViewer") {
         group = "verification"
-        description = "Run Android and iOS fault engine regression tests"
-        workingDir("src/main/resources/faults-engine/android")
-        commandLine(
-            "uv",
-            "run",
-            "--frozen",
-            "--no-dev",
-            "python",
-            "-m",
-            "unittest",
-            "discover",
-            "-s",
-            project.layout.projectDirectory
-                .dir("src/test/python")
-                .asFile.absolutePath,
-            "-p",
-            "test_*.py",
-        )
+        description = "Run shared fault viewer model and navigation regression tests"
+        commandLine("node", "--test", "src/test/javascript/report_model.test.cjs", "src/test/javascript/report_stacks.test.cjs")
     }
 
-    check {
-        dependsOn("testAndroidFaultEngine")
-    }
+    check { dependsOn("testFaultViewer", verifyFaultResources) }
 
     // Build a runnable fat JAR via: ./gradlew shadowJar
     named<ShadowJar>("shadowJar") {

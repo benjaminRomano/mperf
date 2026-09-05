@@ -23,6 +23,8 @@ data class AndroidFaultRequest(
     val label: String,
     val comparisonLabel: String,
     val allowIncomparable: Boolean,
+    val dwarfStacks: Boolean = false,
+    val reclaimMappedApks: Boolean = false,
 )
 
 fun interface AndroidFaultWorkflow {
@@ -38,7 +40,7 @@ internal class DefaultAndroidFaultWorkflow(
         if (!request.skipCollect) {
             AndroidFaultCollector(engineRoot).collect(request)
         }
-        AndroidFaultProcessor(engineRoot).process(request.output)
+        AndroidFaultProcessor().process(request.output)
         val report = request.output.resolve("report.html")
         AndroidFaultReport(engineRoot).build(
             capture = request.output,

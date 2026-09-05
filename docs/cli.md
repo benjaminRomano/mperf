@@ -40,6 +40,8 @@
 | --max-resident-pages | int | Maximum verified resident app-file pages allowed before launch (strict default: 0) |
 | --reboot-before-collect |  | Reboot the target before cache eviction and collection |
 | --native-stacks |  | Capture exact native/ART frame-pointer callchains with each fault |
+| --dwarf-stacks |  | Record system-wide major-fault DWARF/ART stacks; enrich only exact, verified event matches |
+| --reclaim-mapped-apks |  | Opt in to page-out advice on other processes' read-only installed APK mappings; strict cache checks remain |
 | --no-pull-artifacts, --pull-artifacts |  | Pull APK and ART files for section attribution |
 | --skip-collect |  | Reprocess and report an existing exact capture |
 | --overwrite |  | Replace a non-empty output owned by mperf faults |

@@ -13,6 +13,65 @@ class IosFaultProcessorTest {
     lateinit var output: Path
 
     @Test
+    fun `PID reuse is rejected and verified extension code keeps its read attribution`() {
+        val root = output.resolve("Example.app")
+        val executable = root.resolve("PlugIns/Widget.appex/Widget")
+        Files.createDirectories(executable.parent)
+        Files.write(executable, IosMachOTest.machoFixture())
+        Json.write(
+            output.resolve("capture_metadata.json"),
+            mapOf(
+                "schema_version" to 1,
+                "target_pid" to 42,
+                "app_binary_name" to "Example",
+                "app_bundle_root" to root.toString(),
+                "settle_seconds" to 3.0,
+            ),
+        )
+
+        fun row(
+            name: String,
+            time: Long,
+            address: String,
+        ): String =
+            """
+            <row><start-time>$time</start-time><duration>100</duration><vm-op fmt="File Backed Page In">1</vm-op>
+            <address>$address</address><size-in-bytes>16384</size-in-bytes>
+            <thread fmt="Main"><tid>7</tid><process fmt="$name"><pid>42</pid></process></thread>
+            <process fmt="$name"><pid>42</pid></process><tagged-backtrace><backtrace>
+            <frame name="widgetInitialize" addr="0x200000220"><binary name="Widget" path="$executable"
+            UUID="${IosMachOTest.TEST_UUID}" arch="arm64" load-addr="0x200000000"/></frame>
+            </backtrace></tagged-backtrace></row>
+            """.trimIndent()
+        Files.writeString(
+            output.resolve("virtual-memory.xml"),
+            "<trace-query-result><node>" +
+                row("Unrelated", 1, "8589935120") + row("Example (42)", 1000000, "8589935120") +
+                row("Example", 2000000, "8589935248") + row("", 3000000, "18446744073709551615") +
+                "</node></trace-query-result>",
+        )
+
+        IosFaultProcessor().process(output)
+
+        val events = Csv.read(output.resolve("page_fault_events.csv"))
+        assertEquals(3, events.size)
+        assertEquals("0.0", events.first()["time_since_first_fault_ms"])
+        assertEquals("__TEXT,__text", events[0]["read_section"])
+        assertEquals("true", events[0]["read_file_is_bundle_owned"])
+        assertEquals("__TEXT,__const", events[1]["read_section"])
+        assertEquals("false", events[1]["read_section_is_code"])
+        assertEquals("0xffffffffffffffff", events[2]["address_hex"])
+        assertEquals(1, Csv.read(output.resolve("major_page_fault_code_summary.csv")).size)
+        val stack = Json.mapper.readValue(events[0].getValue("stack_frames_json"), List::class.java)
+        assertEquals(true, (stack.first() as Map<*, *>)["app"])
+        val run = IosFaultReport(output).reportRun(output)
+        val reportEvents = run["events"] as List<*>
+        assertEquals(false, (reportEvents.last() as Map<*, *>)["addressPlot"])
+        val sources = run["sources"] as Map<*, *>
+        assertEquals(2, ((sources[executable.toString()] as Map<*, *>)["boundaries"] as List<*>).size)
+    }
+
+    @Test
     fun `filters exact pid and recommends only bundle-owned faulting binaries`() {
         Json.write(
             output.resolve("capture_metadata.json"),
@@ -75,8 +134,8 @@ class IosFaultProcessorTest {
         assertEquals("false", events[0]["faulting_binary_is_bundle_owned"])
         assertEquals("true", events[1]["faulting_binary_is_bundle_owned"])
         assertEquals("false", events[2]["faulting_binary_is_bundle_owned"])
-        assertEquals(1, summaries.size)
-        assertEquals("frameworkLeaf", summaries.single()["faulting_frame"])
+        // App-owned caller/leaf is not enough without a verified instruction-bearing read section.
+        assertTrue(summaries.isEmpty())
         assertFalse(summaries.any { it["faulting_frame"] == "systemLeaf" })
         assertTrue(Json.readMap(output.resolve("capture_metadata.json"))["processing_engine"] == "kotlin")
     }

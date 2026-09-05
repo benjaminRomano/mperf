@@ -46,6 +46,14 @@ class AndroidFaultsCommand(
         "--native-stacks",
         help = "Capture exact native/ART frame-pointer callchains with each fault",
     ).flag(default = false)
+    private val dwarfStacks by option(
+        "--dwarf-stacks",
+        help = "Record system-wide major-fault DWARF/ART stacks; enrich only exact, verified event matches",
+    ).flag(default = false)
+    private val reclaimMappedApks by option(
+        "--reclaim-mapped-apks",
+        help = "Opt in to page-out advice on other processes' read-only installed APK mappings; strict cache checks remain",
+    ).flag(default = false)
     private val pullArtifacts by option("--pull-artifacts", help = "Pull APK and ART files for section attribution")
         .flag("--no-pull-artifacts", default = true)
     private val skipCollect by option(
@@ -95,6 +103,8 @@ class AndroidFaultsCommand(
                     label = label,
                     comparisonLabel = compareLabel,
                     allowIncomparable = allowIncomparable,
+                    dwarfStacks = dwarfStacks,
+                    reclaimMappedApks = reclaimMappedApks,
                 ),
             )
         echo("Android fault report: $report")

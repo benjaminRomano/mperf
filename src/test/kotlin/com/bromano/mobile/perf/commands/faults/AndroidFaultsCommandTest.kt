@@ -32,7 +32,8 @@ class AndroidFaultsCommandTest {
         val result =
             command.test(
                 "--device emulator-5554 --out $output --reboot-before-collect " +
-                    "--max-resident-pages 0 --settle-ms 900 --native-stacks --overwrite --no-open",
+                    "--max-resident-pages 0 --settle-ms 900 --native-stacks --dwarf-stacks " +
+                    "--reclaim-mapped-apks --overwrite --no-open",
             )
 
         assertEquals(0, result.statusCode, result.output)
@@ -44,6 +45,8 @@ class AndroidFaultsCommandTest {
         assertEquals(900, request.settleMs)
         assertTrue(request.pullArtifacts)
         assertTrue(request.nativeStacks)
+        assertTrue(request.dwarfStacks)
+        assertTrue(request.reclaimMappedApks)
         assertTrue(request.overwrite)
     }
 

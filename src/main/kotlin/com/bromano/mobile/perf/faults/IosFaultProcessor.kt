@@ -7,11 +7,6 @@ import javax.xml.stream.XMLInputFactory
 import javax.xml.stream.XMLStreamConstants
 
 internal class IosFaultProcessor {
-    private data class Binary(
-        val name: String,
-        val path: String,
-    )
-
     private data class Source(
         val path: String,
         val line: Int,
@@ -20,7 +15,7 @@ internal class IosFaultProcessor {
     private data class Frame(
         val name: String,
         val address: String,
-        val binary: Binary,
+        val binary: IosMachO.Binary,
         val source: Source,
     )
 
@@ -79,7 +74,11 @@ internal class IosFaultProcessor {
         val appBinaryName = metadata["app_binary_name"].toString()
         val explicitBundleRoot = metadata["app_bundle_root"]?.toString().orEmpty()
         val analysisWindowMs = (metadata["settle_seconds"] as Number).toDouble() * 1_000.0
-        val parsed = parse(vmPath, targetPid)
+        val parsed =
+            parse(vmPath, targetPid).filter { event ->
+                event.processName in setOf(appBinaryName, "$appBinaryName ($targetPid)") ||
+                    (event.processName.isBlank() && event.tagged.frames.any { pathWithin(it.binary.path, explicitBundleRoot) })
+            }
         require(parsed.isNotEmpty()) { "No supported Virtual Memory fault rows were found for PID $targetPid" }
         val sorted = parsed.sortedWith(compareBy<Event> { it.timestamp }.thenBy { it.sourceIndex })
         val first = sorted.first().timestamp
@@ -88,15 +87,17 @@ internal class IosFaultProcessor {
         if (bundleRoot.isBlank()) {
             bundleRoot = inferBundleRoot(events, appBinaryName)
         }
+        val images = IosMachO.Resolver()
         val rows =
             events.mapIndexed { index, event ->
-                eventRow(index + 1, event, first, appBinaryName, bundleRoot)
+                eventRow(index + 1, event, first, appBinaryName, bundleRoot, images)
             }
         val majorRows = rows.filter { it["fault_class"] == "Major" }
         val summaries = summarize(rows)
         Csv.write(output.resolve("page_fault_events.csv"), eventFields, rows)
         Csv.write(output.resolve("major_page_fault_events.csv"), eventFields, majorRows)
         Csv.write(output.resolve("major_page_fault_code_summary.csv"), summaryFields, summaries)
+        Json.write(output.resolve("binary_sections.json"), images.boundaries)
         writeSqlite(output)
 
         val classCounts = rows.groupingBy { it["fault_class"].toString() }.eachCount().toSortedMap()
@@ -200,9 +201,12 @@ internal class IosFaultProcessor {
 
             "vm-op", "path" -> node.attributes["fmt"] ?: node.text.toString()
             "binary" ->
-                Binary(
+                IosMachO.Binary(
                     name = node.attributes["name"].orEmpty(),
                     path = node.attributes["path"].orEmpty(),
+                    uuid = node.attributes["UUID"].orEmpty(),
+                    arch = node.attributes["arch"].orEmpty(),
+                    loadAddress = node.attributes["load-addr"].orEmpty(),
                 )
 
             "source" -> Source(path = child("path")?.toString().orEmpty(), line = node.attributes["line"]?.toIntOrNull() ?: 0)
@@ -210,7 +214,7 @@ internal class IosFaultProcessor {
                 Frame(
                     name = node.attributes["name"].orEmpty(),
                     address = node.attributes["addr"].orEmpty(),
-                    binary = child("binary") as? Binary ?: Binary("", ""),
+                    binary = child("binary") as? IosMachO.Binary ?: IosMachO.Binary(),
                     source = child("source") as? Source ?: Source("", 0),
                 )
 
@@ -304,42 +308,58 @@ internal class IosFaultProcessor {
         firstTimestamp: Long,
         appBinaryName: String,
         bundleRoot: String,
+        images: IosMachO.Resolver,
     ): Map<String, Any?> {
         val frames = event.tagged.frames
         val faulting = frames.firstOrNull()
         val symbolicated = frames.firstOrNull { it.name.isNotBlank() && !it.name.startsWith("0x") }
         val appFrame = frames.firstOrNull { appOwned(it.binary, event.processName, appBinaryName, bundleRoot) }
         val faultingName = faulting?.name?.ifBlank { faulting.address } ?: event.tagged.label
-        return mapOf(
-            "event_index" to eventIndex,
-            "trace_time_seconds" to event.timestamp / 1_000_000_000.0,
-            "time_since_first_fault_ms" to (event.timestamp - firstTimestamp) / 1_000_000.0,
-            "fault_class" to event.faultClass,
-            "operation" to event.operation,
-            "process_name" to event.processName,
-            "pid" to event.thread.process.pid,
-            "address" to event.address,
-            "address_hex" to "0x${event.address.toString(16)}",
-            "size_bytes" to event.sizeBytes,
-            "duration_ns" to event.durationNs,
-            "thread" to event.thread.name,
-            "tid" to event.thread.tid,
-            "faulting_frame" to faultingName,
-            "faulting_instruction" to faulting?.address.orEmpty(),
-            "faulting_binary" to faulting?.binary?.name.orEmpty(),
-            "faulting_binary_path" to faulting?.binary?.path.orEmpty(),
-            "faulting_binary_is_bundle_owned" to (faulting?.let { pathWithin(it.binary.path, bundleRoot) } ?: false),
-            "faulting_source_path" to faulting?.source?.path.orEmpty(),
-            "faulting_source_line" to (faulting?.source?.line ?: 0),
-            "first_symbolicated_frame" to symbolicated?.name.orEmpty(),
-            "first_symbolicated_binary" to symbolicated?.binary?.name.orEmpty(),
-            "first_app_frame" to appFrame?.name.orEmpty(),
-            "first_app_binary" to appFrame?.binary?.name.orEmpty(),
-            "first_app_source_path" to appFrame?.source?.path.orEmpty(),
-            "first_app_source_line" to (appFrame?.source?.line ?: 0),
-            "stack_depth" to frames.size,
-            "stack" to frames.joinToString(" ← ") { frameLabel(it) },
-        )
+        val read = images.resolve(event.address, frames.map { it.binary })
+        return read +
+            mapOf(
+                "read_file_is_bundle_owned" to pathWithin(read["read_file"]?.toString().orEmpty(), bundleRoot),
+                "stack_frames_json" to
+                    Json.mapper.writeValueAsString(
+                        frames.map { frame ->
+                            mapOf(
+                                "label" to frame.name.ifBlank { frame.address.ifBlank { "Unresolved" } },
+                                "file" to frame.binary.path,
+                                "kind" to "user",
+                                "app" to pathWithin(frame.binary.path, bundleRoot),
+                                "unresolved" to (frame.name.isBlank() || frame.name.startsWith("0x")),
+                            )
+                        },
+                    ),
+                "event_index" to eventIndex,
+                "trace_time_seconds" to event.timestamp / 1_000_000_000.0,
+                "time_since_first_fault_ms" to (event.timestamp - firstTimestamp) / 1_000_000.0,
+                "fault_class" to event.faultClass,
+                "operation" to event.operation,
+                "process_name" to event.processName,
+                "pid" to event.thread.process.pid,
+                "address" to event.address,
+                "address_hex" to "0x${event.address.toString(16)}",
+                "size_bytes" to event.sizeBytes,
+                "duration_ns" to event.durationNs,
+                "thread" to event.thread.name,
+                "tid" to event.thread.tid,
+                "faulting_frame" to faultingName,
+                "faulting_instruction" to faulting?.address.orEmpty(),
+                "faulting_binary" to faulting?.binary?.name.orEmpty(),
+                "faulting_binary_path" to faulting?.binary?.path.orEmpty(),
+                "faulting_binary_is_bundle_owned" to (faulting?.let { pathWithin(it.binary.path, bundleRoot) } ?: false),
+                "faulting_source_path" to faulting?.source?.path.orEmpty(),
+                "faulting_source_line" to (faulting?.source?.line ?: 0),
+                "first_symbolicated_frame" to symbolicated?.name.orEmpty(),
+                "first_symbolicated_binary" to symbolicated?.binary?.name.orEmpty(),
+                "first_app_frame" to appFrame?.name.orEmpty(),
+                "first_app_binary" to appFrame?.binary?.name.orEmpty(),
+                "first_app_source_path" to appFrame?.source?.path.orEmpty(),
+                "first_app_source_line" to (appFrame?.source?.line ?: 0),
+                "stack_depth" to frames.size,
+                "stack" to frames.joinToString(" ← ") { frameLabel(it) },
+            )
     }
 
     private fun summarize(rows: List<Map<String, Any?>>): List<Map<String, Any?>> {
@@ -348,6 +368,8 @@ internal class IosFaultProcessor {
                 val frame = it["faulting_frame"].toString()
                 it["fault_class"] == "Major" &&
                     it["faulting_binary_is_bundle_owned"] == true &&
+                    it["read_file_is_bundle_owned"] == true &&
+                    it["read_section_is_code"] == true &&
                     frame.isNotBlank() &&
                     !frame.startsWith("0x") &&
                     frame !in genericEntryPoints &&
@@ -417,7 +439,7 @@ internal class IosFaultProcessor {
     private fun sqliteArgument(path: Path): String = "\"${path.toString().replace("\"", "\"\"")}\""
 
     private fun appOwned(
-        binary: Binary,
+        binary: IosMachO.Binary,
         processName: String,
         appBinaryName: String,
         bundleRoot: String,
@@ -468,6 +490,12 @@ internal class IosFaultProcessor {
         val eventFields =
             listOf(
                 "event_index",
+                "read_file",
+                "read_section",
+                "read_file_offset",
+                "read_section_is_code",
+                "read_file_is_bundle_owned",
+                "stack_frames_json",
                 "trace_time_seconds",
                 "time_since_first_fault_ms",
                 "fault_class",

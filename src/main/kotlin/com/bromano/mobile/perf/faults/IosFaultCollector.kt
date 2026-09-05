@@ -43,7 +43,7 @@ internal class IosFaultCollector(
     private val marker = "ios-fault-visualizer capture v1\n"
 
     fun collect(request: IosFaultRequest) {
-        validateWindow(request)
+        IosRecordingLifecycle.validateWindow(request.settleSeconds, request.timeLimit)
         val output = request.output.toAbsolutePath().normalize()
         validateOutput(output, request.overwrite)
         Files.createDirectories(output.parent)
@@ -128,17 +128,13 @@ internal class IosFaultCollector(
             check(recording.process.isAlive) { "xctrace exited between readiness and target launch" }
             launchNs = System.nanoTime()
             targetPid = launch(target, bundle, request.appArguments, staging)
-            val settleMillis = kotlin.math.ceil(request.settleSeconds * 1_000).toLong()
-            if (recording.process.waitFor(settleMillis, TimeUnit.MILLISECONDS)) {
-                val detail = Files.readString(recording.stderr).trim()
-                error(
-                    "xctrace ended before the requested post-launch analysis window completed " +
-                        "(exit ${recording.process.exitValue()}, requested ${request.settleSeconds}s)" +
-                        detail.takeIf(String::isNotBlank)?.let { "\n$it" }.orEmpty(),
-                )
+            IosRecordingLifecycle.requirePostLaunchWindow(recording.process, request.settleSeconds) {
+                Files.readString(recording.stderr).trim()
             }
             if (target.simulator && installedBundle != null && cache["residency_gate"] == true) {
-                residency += measureResidency(installedBundle, "after_target_launch", staging)
+                val afterLaunch = measureResidency(installedBundle, "after_target_launch", staging)
+                residency += afterLaunch
+                cache["residency_after_target_launch"] = summarize(afterLaunch)
             }
         } catch (error: Throwable) {
             abort(recording)
@@ -208,16 +204,6 @@ internal class IosFaultCollector(
         Json.write(staging.resolve("capture_metadata.json"), metadata)
         IosFaultProcessor().process(staging)
         IosFaultReport(engineRoot).build(staging, staging.resolve("report.html"))
-    }
-
-    private fun validateWindow(request: IosFaultRequest) {
-        require(request.settleSeconds.isFinite() && request.settleSeconds > 0) { "--settle-seconds must be positive and finite" }
-        request.timeLimit?.let {
-            require(it > 0) { "--time-limit must be positive" }
-            require(it >= kotlin.math.ceil(request.settleSeconds).toInt()) {
-                "--time-limit must be at least ceil(--settle-seconds) (${kotlin.math.ceil(request.settleSeconds).toInt()} seconds)"
-            }
-        }
     }
 
     private fun resolveTarget(selector: String): Target {
@@ -747,22 +733,10 @@ internal class IosFaultCollector(
         recording: Recording,
         timeout: Duration,
     ) {
-        val deadline = System.nanoTime() + timeout.toNanos()
-        while (System.nanoTime() < deadline) {
-            if (!recording.listener.isAlive) {
-                require(recording.listener.exitValue() == 0 && recording.process.isAlive) {
-                    "xctrace readiness listener or recorder exited before launch: ${recordingLogs(recording)}"
-                }
-                recording.readyNs = System.nanoTime()
-                return
+        recording.readyNs =
+            IosRecordingLifecycle.awaitReady(recording.process, recording.listener, timeout) {
+                recordingLogs(recording)
             }
-            require(recording.process.isAlive) {
-                "xctrace exited before readiness: ${recordingLogs(recording)}"
-            }
-            Thread.sleep(50)
-        }
-        abort(recording)
-        error("xctrace timed out before reporting that recording began: ${recordingLogs(recording)}")
     }
 
     private fun launch(

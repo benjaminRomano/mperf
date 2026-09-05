@@ -5,7 +5,6 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.security.MessageDigest
 import java.time.Duration
-import java.util.concurrent.TimeUnit
 import kotlin.io.path.isDirectory
 import kotlin.io.path.name
 
@@ -17,6 +16,8 @@ internal class AndroidFaultCollector(
     private val remoteFaults = "$remoteDirectory/fault_events.csv"
     private val remoteMappings = "$remoteDirectory/mapping_events.csv"
     private val remoteCallchains = "$remoteDirectory/fault_callchains.csv"
+    private var capturePageSize = 0
+    private var captureWarnings = mutableListOf<String>()
 
     fun collect(request: AndroidFaultRequest) {
         val packageName = requireNotNull(request.packageName)
@@ -33,6 +34,7 @@ internal class AndroidFaultCollector(
                 .trim()
                 .toInt()
         val apkPaths = adb.packagePaths(packageName)
+        capturePageSize = pageSize
         val activity = request.activity?.let { if ("/" in it) it else "$packageName/$it" } ?: adb.resolveActivity(packageName)
         val build = buildCollector(adb, request.output, abi, sdk)
         val metadata =
@@ -50,11 +52,15 @@ internal class AndroidFaultCollector(
                 "page_size" to pageSize,
                 "online_cpus_sysfs" to adb.shell("cat /sys/devices/system/cpu/online").stdout.trim(),
                 "collector" to "perf-software-page-fault-events",
-                "collector_version" to 4,
+                "collector_version" to 5,
+                "collector_clock" to "boottime",
                 "capture_native_callchains" to request.nativeStacks,
+                "simpleperf_status" to if (request.dwarfStacks) "requested" else "disabled",
                 "cache_procedure" to "force-stop-wait+stable-target-set+sync+drop_caches+fadvise+mincore-v3",
                 "cache_max_resident_pages" to request.maxResidentPages,
                 "reboot_before_collect" to request.rebootBeforeCollect,
+                "reclaim_mapped_apks" to request.reclaimMappedApks,
+                "mapped_apk_reclaim" to mutableListOf<Map<String, Any?>>(),
                 "boot_id" to adb.shell("cat /proc/sys/kernel/random/boot_id").stdout.trim(),
                 "device_uptime_seconds" to
                     adb
@@ -67,6 +73,7 @@ internal class AndroidFaultCollector(
                 "warnings" to mutableListOf<String>(),
             )
         metadata.putAll(build)
+        captureWarnings = warnings(metadata)
         Json.write(request.output.resolve("capture_metadata.json"), metadata)
 
         adb.shell("am force-stop ${quote(packageName)}")
@@ -86,6 +93,15 @@ internal class AndroidFaultCollector(
             }
         }
         collectorFileCommand(adb, "--evict", targets)
+
+        fun reclaim(phase: String) {
+            if (!request.reclaimMappedApks) return
+            val diagnostic = AndroidCache.reclaim(adb, apkPaths, request.output, phase)
+            @Suppress("UNCHECKED_CAST")
+            (metadata["mapped_apk_reclaim"] as MutableList<Map<String, Any?>>).add(diagnostic)
+            diagnostic["warning"]?.let { warnings(metadata).add(it.toString()) }
+        }
+        reclaim("after_drop")
         residency += residency(adb, targets, "after_drop", apkPaths)
         writeResidency(request.output, residency)
         verifyResidency(metadata, request.output, residency, "after_drop", request.maxResidentPages)
@@ -94,12 +110,14 @@ internal class AndroidFaultCollector(
         val remoteTrace = "/data/misc/perfetto-traces/$traceName.pftrace"
         var perfetto: Running? = null
         var collector: CollectorRunning? = null
+        var dwarf: AndroidDwarf.Running? = null
         var primaryFailure: Throwable? = null
         try {
             perfetto = startPerfetto(adb, remoteTrace)
             collector = startCollector(adb, request.nativeStacks)
             metadata["collector_start_ns"] = collector.startNs
             metadata["collector_online_cpus"] = collector.onlineCpus
+            if (request.dwarfStacks) dwarf = AndroidDwarf.start(adb)
             require(collector.onlineCpus == metadata["online_cpus_sysfs"]) {
                 "CPU topology changed while starting collector: sysfs=${metadata["online_cpus_sysfs"]}, collector=${collector.onlineCpus}"
             }
@@ -115,6 +133,7 @@ internal class AndroidFaultCollector(
                 collectorFileCommand(adb, "--evict", added.sorted())
             }
             targets = currentTargets
+            reclaim("before_launch")
             residency += residency(adb, targets, "before_launch", apkPaths)
             writeResidency(request.output, residency)
             verifyResidency(metadata, request.output, residency, "before_launch", request.maxResidentPages)
@@ -161,7 +180,7 @@ internal class AndroidFaultCollector(
                 try {
                     val terminal = stopCollector(adb, running)
                     terminal.forEach { (key, value) -> metadata["collector_$key"] = value }
-                    metadata["collector_return_code"] = running.process.exitValue()
+                    metadata["collector_return_code"] = running.recorder.process.exitValue()
                     metadata["collector_loss_detection"] =
                         if (terminal["lost_counter_supported"] == 1L) "counter_and_ring" else "ring_records_only"
                 } catch (error: Throwable) {
@@ -175,6 +194,15 @@ internal class AndroidFaultCollector(
                 } catch (error: Throwable) {
                     metadata["perfetto_stop_error"] = error.message
                     cleanupFailure?.addSuppressed(error) ?: run { cleanupFailure = error }
+                }
+            }
+            dwarf?.let { running ->
+                try {
+                    AndroidDwarf.finish(adb, running, metadata, request.output) { remote, local -> pull(adb, remote, local) }
+                    metadata["simpleperf_status"] = "complete"
+                } catch (error: Exception) {
+                    metadata["simpleperf_status"] = "failed"
+                    warnings(metadata) += "DWARF companion unavailable; raw capture preserved pending integrity checks: ${error.message}"
                 }
             }
             Json.write(request.output.resolve("capture_metadata.json"), metadata)
@@ -191,6 +219,7 @@ internal class AndroidFaultCollector(
             "rm -f ${quote(remoteFaults)} ${quote(remoteMappings)} ${quote(remoteCallchains)} ${quote(remoteTrace)}",
         )
         if (request.pullArtifacts) pullArtifacts(adb, apkPaths, abi, request.output)
+        if (request.nativeStacks || request.dwarfStacks) pullStackBinaries(adb, request.output, warnings(metadata))
 
         val integrity =
             listOf("lost", "integrity_errors", "throttled", "callchain_overflow")
@@ -205,17 +234,13 @@ internal class AndroidFaultCollector(
     }
 
     private data class Running(
-        val process: Process,
-        val pid: Long,
+        val recorder: AndroidRecorder,
     )
 
     private data class CollectorRunning(
-        val process: Process,
-        val reader: java.io.BufferedReader,
-        val pid: Long,
+        val recorder: AndroidRecorder,
         val startNs: Long,
         val onlineCpus: String,
-        val prefix: String,
     )
 
     private fun startPerfetto(
@@ -223,23 +248,21 @@ internal class AndroidFaultCollector(
         remoteTrace: String,
     ): Running {
         require(adb.pid("perfetto") == null) { "Another Perfetto command is already running" }
-        val process =
-            ProcessBuilder(adb.command("shell", "perfetto", "--txt", "-c", "-", "-o", remoteTrace))
-                .redirectErrorStream(true)
-                .start()
-        process.outputStream.bufferedWriter().use {
-            it.write(Files.readString(engineRoot.resolve("android/ftrace.config")))
-        }
-        var devicePid: Long? = null
+        val recorder =
+            AndroidRecorder.start(
+                adb,
+                "perfetto --txt -c - -o ${quote(remoteTrace)}",
+                Files.readString(engineRoot.resolve("android/ftrace.config")),
+            )
         try {
             await(Duration.ofSeconds(10), "Perfetto readiness") {
-                if (!process.isAlive) error("Perfetto exited before readiness: ${process.inputStream.bufferedReader().readText()}")
-                devicePid = adb.pid("perfetto")
+                check(recorder.process.isAlive) { "Perfetto exited before readiness: ${recorder.text()}" }
                 val tracing =
                     adb
                         .rootShell(
                             "cat /sys/kernel/tracing/tracing_on 2>/dev/null || cat /sys/kernel/debug/tracing/tracing_on 2>/dev/null",
                             check = false,
+                            timeout = Duration.ofSeconds(2),
                         ).stdout
                         .trim()
                 val event =
@@ -248,107 +271,59 @@ internal class AndroidFaultCollector(
                             "cat /sys/kernel/tracing/events/filemap/mm_filemap_add_to_page_cache/enable 2>/dev/null || " +
                                 "cat /sys/kernel/debug/tracing/events/filemap/mm_filemap_add_to_page_cache/enable 2>/dev/null",
                             check = false,
+                            timeout = Duration.ofSeconds(2),
                         ).stdout
                         .trim()
-                devicePid != null && tracing == "1" && event == "1"
+                tracing == "1" && event == "1"
             }
-            return Running(process, requireNotNull(devicePid))
+            return Running(recorder)
         } catch (error: Throwable) {
-            (devicePid ?: adb.pid("perfetto"))?.let { adb.rootShell("kill -KILL $it", check = false) }
-            process.destroy()
-            if (!process.waitFor(2, TimeUnit.SECONDS)) process.destroyForcibly()
+            recorder.abort(error)
             throw error
         }
     }
 
     private fun stopPerfetto(
-        adb: Device,
+        @Suppress("UNUSED_PARAMETER") adb: Device,
         running: Running,
     ) {
-        adb.rootShell("kill -INT ${running.pid}", check = false)
-        if (!running.process.waitFor(20, TimeUnit.SECONDS)) {
-            adb.rootShell("kill -KILL ${running.pid}", check = false)
-            running.process.destroy()
-            if (!running.process.waitFor(2, TimeUnit.SECONDS)) running.process.destroyForcibly()
-            error("Perfetto did not stop within 20 seconds")
-        }
-        require(running.process.exitValue() in setOf(0, 130)) {
-            "Perfetto failed while stopping: ${running.process.inputStream.bufferedReader().readText()}"
-        }
+        val output = running.recorder.stop()
+        require(running.recorder.process.exitValue() in setOf(0, 130)) { "Perfetto failed: $output" }
     }
 
     private fun startCollector(
         adb: Device,
         stacks: Boolean,
     ): CollectorRunning {
-        require(adb.pid("page_fault_collector") == null) {
-            "Another page_fault_collector is already running"
-        }
-        val remoteCommand =
-            buildString {
-                append("$remoteCollector --output $remoteFaults --mappings-output $remoteMappings ")
-                if (stacks) append("--callchains-output $remoteCallchains ")
-                append("--duration-ms 60000")
-            }
-        val command = adb.rootCommand(remoteCommand)
-        val process = ProcessBuilder(command).redirectErrorStream(true).start()
-        val reader = process.inputStream.bufferedReader()
-        val prefix = StringBuilder()
-        val ready = Regex("READY pid=(\\d+) capture_start_ns=(\\d+) online_cpus=([0-9,-]+)")
+        require(adb.pid("page_fault_collector") == null) { "Another fault collector is already running" }
+        val command =
+            "$remoteCollector --output $remoteFaults --mappings-output $remoteMappings " +
+                (if (stacks) "--callchains-output $remoteCallchains " else "") + "--duration-ms 60000"
+        val recorder = AndroidRecorder.start(adb, command)
         try {
-            val deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos()
-            while (System.nanoTime() < deadline) {
-                if (reader.ready()) {
-                    val line = reader.readLine() ?: error("Fault collector exited before readiness:\n$prefix")
-                    prefix.appendLine(line)
-                    val match = ready.find(line)
-                    if (match != null) {
-                        return CollectorRunning(
-                            process,
-                            reader,
-                            match.groupValues[1].toLong(),
-                            match.groupValues[2].toLong(),
-                            match.groupValues[3],
-                            prefix.toString(),
-                        )
-                    }
-                }
-                if (!process.isAlive) error("Fault collector exited before readiness:\n$prefix${reader.readText()}")
-                Thread.sleep(25)
-            }
-            error("Timed out waiting for fault collector readiness:\n$prefix")
+            val ready = recorder.await(Regex("READY pid=(\\d+) capture_start_ns=(\\d+) online_cpus=([0-9,-]+)"))
+            require(ready.groupValues[1].toLong() == recorder.pid) { "Collector PID differs from owned exec PID" }
+            return CollectorRunning(recorder, ready.groupValues[2].toLong(), ready.groupValues[3])
         } catch (error: Throwable) {
-            adb.pid("page_fault_collector")?.let { adb.rootShell("kill -KILL $it", check = false) }
-            process.destroy()
-            if (!process.waitFor(2, TimeUnit.SECONDS)) process.destroyForcibly()
+            recorder.abort(error)
             throw error
         }
     }
 
     private fun stopCollector(
-        adb: Device,
+        @Suppress("UNUSED_PARAMETER") adb: Device,
         running: CollectorRunning,
-    ): Map<String, Long> {
-        adb.rootShell("kill -INT ${running.pid}", check = false)
-        if (!running.process.waitFor(20, TimeUnit.SECONDS)) {
-            adb.rootShell("kill -KILL ${running.pid}", check = false)
-            running.process.destroy()
-            if (!running.process.waitFor(2, TimeUnit.SECONDS)) running.process.destroyForcibly()
-            error("Fault collector did not stop within 20 seconds")
-        }
-        val remaining = running.reader.readText()
-        val output = running.prefix + remaining
-        val expression =
-            Regex(
-                "capture_start_ns=(\\d+) capture_end_ns=(\\d+) samples=(\\d+) mappings=(\\d+) " +
-                    "lost=(\\d+) integrity_errors=(\\d+) throttled=(\\d+) callchain_entries=(\\d+) " +
-                    "callchain_overflow=(\\d+) lost_counter_supported=([01])",
-            )
-        val match = expression.find(output) ?: error("Invalid collector terminal metadata:\n$output")
-        val names =
+    ): Map<String, Long> = parseCollectorSummary(running.recorder.stop())
+
+    internal fun parseCollectorSummary(output: String): Map<String, Long> {
+        val line =
+            output.lineSequence().lastOrNull { it.startsWith("capture_start_ns=") }
+                ?: error("Invalid collector terminal metadata: $output")
+        val parsed = Regex("([a-z_]+)=(\\d+)").findAll(line).associate { it.groupValues[1] to it.groupValues[2].toLong() }
+        val required =
             listOf(
-                "start",
-                "end",
+                "capture_start_ns",
+                "capture_end_ns",
                 "samples",
                 "mappings",
                 "lost",
@@ -358,7 +333,14 @@ internal class AndroidFaultCollector(
                 "callchain_overflow",
                 "lost_counter_supported",
             )
-        return names.mapIndexed { index, name -> name to match.groupValues[index + 1].toLong() }.toMap()
+        require(parsed.keys.containsAll(required)) { "Incomplete collector terminal metadata: $line" }
+        return parsed.mapKeys { (key, _) ->
+            when (key) {
+                "capture_start_ns" -> "start"
+                "capture_end_ns" -> "end"
+                else -> key
+            }
+        }
     }
 
     private fun buildCollector(
@@ -391,6 +373,9 @@ internal class AndroidFaultCollector(
             "compiler" to compiler.name,
             "collector_source_sha256" to sha256(source),
             "collector_binary_sha256" to sha256(local),
+            "collector_cpu_list_header_sha256" to sha256(source.parent.resolve("cpu_list.h")),
+            "collector_apk_reclaim_header_sha256" to sha256(source.parent.resolve("apk_cache_reclaim.h")),
+            "llvm_symbolizer" to compiler.parent.resolve("llvm-symbolizer").toString(),
         )
     }
 
@@ -491,6 +476,12 @@ internal class AndroidFaultCollector(
         try {
             Files.writeString(temporary, result.stdout)
             val rows = Csv.read(temporary)
+            AndroidCache.validateResidency(rows, files, required, capturePageSize)
+            val missing = files.toSet() - rows.map { it.getValue("file_name") }.toSet()
+            if (missing.isNotEmpty()) {
+                captureWarnings +=
+                    "$phase: ignored ${missing.size} non-essential files that disappeared: ${missing.joinToString()}"
+            }
             require(rows.map { it.getValue("file_name") }.toSet().containsAll(required)) {
                 "Missing required installed APK residency rows"
             }
@@ -653,6 +644,41 @@ internal class AndroidFaultCollector(
         require(process.waitFor() == 0) { "Unable to pull $remote with root" }
     }
 
+    private fun pullStackBinaries(
+        adb: Device,
+        output: Path,
+        warnings: MutableList<String>,
+    ) {
+        val mappingPath = output.resolve("artifacts.json")
+        val mapping = if (Files.exists(mappingPath)) Json.readMap(mappingPath) else mutableMapOf()
+        val directory = output.resolve("artifacts")
+        Files.createDirectories(directory)
+        val binaries =
+            Files
+                .readAllLines(output.resolve("maps.txt"))
+                .mapNotNull { line ->
+                    line.trim().split(Regex("\\s+"), limit = 6).getOrNull(5)
+                }.filter { path ->
+                    path.startsWith('/') &&
+                        !path.endsWith(" (deleted)") &&
+                        (
+                            path.endsWith(".so") ||
+                                Path.of(path).fileName.toString() in listOf("linker", "linker64", "app_process32", "app_process64")
+                        )
+                }.distinct()
+        binaries.filterNot(mapping::containsKey).forEach { remote ->
+            val local = directory.resolve("${sha256(remote.toByteArray()).take(10)}-${Path.of(remote).fileName}")
+            try {
+                pull(adb, remote, local)
+                mapping[remote] = output.relativize(local).toString()
+            } catch (error: Exception) {
+                Files.deleteIfExists(local)
+                warnings += "Could not pull optional stack binary $remote: ${error.message}"
+            }
+        }
+        Json.write(mappingPath, mapping)
+    }
+
     private fun List<String>.commandIndexForShell(): Int = indexOf("shell")
 
     private fun resetOutput(
@@ -696,7 +722,7 @@ internal class AndroidFaultCollector(
         error("Timed out waiting for $operation")
     }
 
-    private class Device private constructor(
+    internal class Device private constructor(
         val serial: String,
     ) {
         private var rootTemplate: String? = null
@@ -707,12 +733,14 @@ internal class AndroidFaultCollector(
         fun run(
             vararg arguments: String,
             check: Boolean = true,
-        ): CommandResult = Processes.run(base + arguments, check = check)
+            timeout: Duration = Duration.ofSeconds(30),
+        ): CommandResult = Processes.run(base + arguments, check = check, timeout = timeout)
 
         fun shell(
             command: String,
             check: Boolean = true,
-        ): CommandResult = run("shell", command, check = check)
+            timeout: Duration = Duration.ofSeconds(30),
+        ): CommandResult = run("shell", command, check = check, timeout = timeout)
 
         fun property(name: String): String = shell("getprop ${quote(name)}").stdout.trim()
 
@@ -733,7 +761,8 @@ internal class AndroidFaultCollector(
         fun rootShell(
             command: String,
             check: Boolean = true,
-        ): CommandResult = Processes.run(rootCommand(command), check = check)
+            timeout: Duration = Duration.ofSeconds(30),
+        ): CommandResult = Processes.run(rootCommand(command), check = check, timeout = timeout)
 
         fun packagePaths(packageName: String): List<String> =
             shell("pm path ${quote(packageName)}")
@@ -781,11 +810,25 @@ internal class AndroidFaultCollector(
         fun pid(process: String): Long? = shell("pidof -s ${quote(process)}", check = false).stdout.trim().toLongOrNull()
 
         fun reboot() {
-            run("reboot")
-            run("wait-for-device")
+            val previous = shell("cat /proc/sys/kernel/random/boot_id", timeout = Duration.ofSeconds(5)).stdout.trim()
+            require(Regex("[0-9a-fA-F-]{36}").matches(previous)) { "Unable to establish current boot identity" }
+            run("reboot", timeout = Duration.ofSeconds(15))
+            rootTemplate = null
             val deadline = System.nanoTime() + Duration.ofMinutes(3).toNanos()
             while (System.nanoTime() < deadline) {
-                if (shell("getprop sys.boot_completed", check = false).stdout.trim() == "1") return
+                val current =
+                    runCatching {
+                        shell("cat /proc/sys/kernel/random/boot_id", check = false, timeout = Duration.ofSeconds(5))
+                    }.getOrNull()
+                val completed =
+                    if (current?.exitCode == 0) {
+                        runCatching {
+                            shell("getprop sys.boot_completed", check = false, timeout = Duration.ofSeconds(5)).stdout.trim()
+                        }.getOrDefault("")
+                    } else {
+                        ""
+                    }
+                if (current?.exitCode == 0 && AndroidCache.newBootReady(previous, current.stdout.trim(), completed)) return
                 Thread.sleep(1_000)
             }
             error("Timed out waiting for Android boot")
