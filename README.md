@@ -249,21 +249,18 @@ The capture fails if the receiver is absent/unsuccessful or ART still reports an
 `speed` fallback. See [Android's baseline installation workflow](https://developer.android.com/topic/performance/baselineprofiles/manually-create-measure#sideload-baseline).
 This preparation can start the app process via a broadcast, before eviction, and retains app data and existing profiles.
 For deliberate reset/full-AOT comparisons use `--compilation as-is`; replaying saved captures never changes device state.
-Raw ART compilation dumps and profile-source evidence are retained before eviction and after recording. See the
-[ChatGPT reset-versus-AOT comparison](docs/chatgpt-compilation-comparison.md) for verified `verify`/`speed` states,
-compiled-code section evidence, and instructions for exploring both page-fault patterns.
+Raw ART compilation dumps and profile-source evidence are retained before eviction and after recording.
 
 Compiled ODEX code is resolved with the device's `oatdump`, matching every DEX location checksum and the
 captured APK/ODEX/VDEX hashes. Selected faults show the DEX and compiled method containing the exact address,
 separately from other methods sharing that page and from the captured caller stack. Shared-code aliases stay
 ambiguous; obfuscated names require the app's R8 mapping to recover source names. Unsupported/malformed OAT
-metadata leaves attribution unavailable without discarding the trace. See the [profiled ODEX audit](docs/android-profiled-oat-audit.md).
+metadata leaves attribution unavailable without discarding the trace.
 
 Add `--io-evidence` to record available block/scheduler events in the same Perfetto session and export ART advice,
 system-wide guest block events, and app thread states as CSVs. These streams measure different layers; do not
-equate page faults, advised bytes, read requests, or stall time. See [startup I/O measurement](docs/startup-io-measurement.md).
-The [Perfetto foundation audit](docs/perfetto-fault-foundation.md) explains which native components can be replaced
-by standard tools and why stock ftrace/Perfetto currently cannot reconstruct every exact fault address.
+equate page faults, advised bytes, read requests, or stall time. The native collector supplies exact fault addresses;
+Perfetto supplies startup and scheduling context, and Simpleperf supplies optional DWARF stacks.
 
 ### Perfetto (Default)
 

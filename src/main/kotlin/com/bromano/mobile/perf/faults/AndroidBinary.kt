@@ -8,6 +8,14 @@ import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
 internal object AndroidBinary {
+    /** Native hex and processed signed/unsigned decimal encode the same 64-bit address. */
+    fun unsignedAddress(value: String): ULong =
+        when {
+            value.startsWith("0x") -> value.substring(2).toULong(16)
+            value.startsWith("-") -> value.toLong().toULong()
+            else -> value.toULong()
+        }
+
     data class Region(
         val start: Long,
         val end: Long,

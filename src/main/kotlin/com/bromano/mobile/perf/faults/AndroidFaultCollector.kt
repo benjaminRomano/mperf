@@ -705,6 +705,7 @@ internal class AndroidFaultCollector(
         val home = Path.of(System.getProperty("user.home")).toAbsolutePath().normalize()
         require(absolute.parent != null && absolute != home) { "Refusing unsafe output directory: $absolute" }
         require(!Files.isSymbolicLink(output)) { "Refusing symbolic-link output directory: $output" }
+        require(!Files.exists(output) || Files.isDirectory(output)) { "Output path must be a directory: $output" }
         if (Files.exists(output) && Files.list(output).use { it.findAny().isPresent }) {
             require(overwrite) { "Output directory is not empty: $output" }
             require(Files.readString(output.resolve(".android-fault-visualizer-capture")) == "android-fault-visualizer capture v1\n") {

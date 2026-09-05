@@ -308,6 +308,44 @@ class AndroidParityTest {
         assertNotNull(AndroidDwarf.reportRun(directory, metadata))
     }
 
+    @Test fun `high bit native addresses survive processed CSV report and exact stack matching`() {
+        for (address in listOf(0x8000000000000000UL, ULong.MAX_VALUE)) {
+            val metadata = capture()
+            val rawPath = directory.resolve("fault_events.csv")
+            val native = Csv.read(rawPath).map { it + ("address" to "0x${address.toString(16)}") }
+            Csv.write(rawPath, native.first().keys.toList(), native)
+            // The processor uses Long bit patterns internally; CSV retains signed decimal values.
+            val processedPath = directory.resolve("all_faults.csv")
+            val processed =
+                Csv.read(processedPath).map {
+                    it + mapOf("address" to address.toLong().toString(), "elapsed_ms" to "0.0")
+                }
+            Csv.write(processedPath, processed.first().keys.toList(), processed)
+            val exact = AndroidDwarf.exactMatches(directory, metadata)
+            assertTrue(exact.warnings.isEmpty(), exact.warnings.toString())
+            assertEquals(
+                "Example.start",
+                exact.matches
+                    .getValue(0)
+                    .stack
+                    .single()["label"],
+            )
+            metadata.putAll(
+                mapOf(
+                    "schema_version" to 5,
+                    "processing_status" to "complete",
+                    "page_size" to 4096,
+                    "results" to mapOf("all_faults" to processed.size),
+                ),
+            )
+            Json.write(directory.resolve("capture_metadata.json"), metadata)
+            val run = AndroidFaultReport(directory).reportRun(directory, "High address")
+            val event = (run.getValue("events") as List<*>).single() as Map<*, *>
+            assertEquals("0x${address.toString(16)}", event["address"])
+            assertEquals(address, AndroidBinary.unsignedAddress(address.toString()))
+        }
+    }
+
     @Test fun `missing native integrity counters reject DWARF enrichment`() {
         val metadata = capture()
         metadata.remove("collector_lost")

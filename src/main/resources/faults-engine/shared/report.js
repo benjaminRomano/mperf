@@ -538,8 +538,6 @@ function drawStacks() {
     stacksOnly: Boolean(run.stacksOnly),
     selectedId: selected?.id,
     mode: flame ? "flame" : "chronological",
-    start: 0,
-    limit: 0,
   });
 }
 function selectFault(e) {

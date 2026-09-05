@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.1.1] - 2026-09-05
 
 ### Added
 
@@ -35,6 +35,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Fixed Android report source ordering to rank major faults first, retain whole VDEX sources, show verified embedded
   DEX boundaries, preserve full source paths in hover details, and avoid WebGL-only scatter rendering.
 - Fixed missing kernel blocked-function symbols by enabling on-device symbolization for supported blocked-reason events.
+- Fixed high-bit Android fault addresses failing report generation or losing exact DWARF matches after CSV serialization.
 - Fixed iOS startup ordering to wait for recorder readiness before launch, explicit app/bundle selection, recording-window
   validation, and attribution of app-owned framework and extension code.
 

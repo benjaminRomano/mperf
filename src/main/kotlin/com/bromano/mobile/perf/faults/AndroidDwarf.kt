@@ -360,7 +360,9 @@ internal object AndroidDwarf {
                         processedRow["ts"]?.toLong() == key(row).timestamp &&
                         processedRow["event_type"] == row["event_type"] &&
                         processedRow["tid"] == row["tid"] &&
-                        listOf("ip", "address").all { unsigned(processedRow.getValue(it)) == unsigned(row.getValue(it)) },
+                        listOf("ip", "address").all {
+                            AndroidBinary.unsignedAddress(processedRow.getValue(it)) == AndroidBinary.unsignedAddress(row.getValue(it))
+                        },
                 ) {
                     "Processed fault identity differs from native record"
                 }
@@ -379,7 +381,7 @@ internal object AndroidDwarf {
                 val fault = n.single()
                 val symbol = s.single()
                 if (fault["event_type"] == "major" &&
-                    r.ip == unsigned(fault.getValue("ip")) &&
+                    r.ip == AndroidBinary.unsignedAddress(fault.getValue("ip")) &&
                     r.cpu == fault["cpu"]?.toLong() &&
                     r.frames > 0 &&
                     symbol.stack.isNotEmpty()
@@ -497,6 +499,4 @@ internal object AndroidDwarf {
     }
 
     private fun number(value: Any?): Long = (value as? Number)?.toLong() ?: error("Missing numeric capture metadata")
-
-    private fun unsigned(value: String): ULong = if (value.startsWith("0x")) value.substring(2).toULong(16) else value.toULong()
 }

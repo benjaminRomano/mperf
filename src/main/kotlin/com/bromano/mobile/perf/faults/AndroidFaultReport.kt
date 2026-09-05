@@ -191,7 +191,7 @@ internal class AndroidFaultReport(
                         "id" to seq,
                         "time" to row.getValue("elapsed_ms").toDouble(),
                         "major" to (row["event_type"] == "major"),
-                        "address" to "0x${row.getValue("address").toULong().toString(16)}",
+                        "address" to "0x${AndroidBinary.unsignedAddress(row.getValue("address")).toString(16)}",
                         "source" to file,
                         "fileBacked" to (row["mapping_kind"] == "file"),
                         "page" to offset?.div(pageSize),
