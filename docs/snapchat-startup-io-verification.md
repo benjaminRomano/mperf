@@ -33,3 +33,60 @@ CPU scheduling, ftrace and the Snapchat process appeared in its timeline. No tra
 The same UI changes were replayed into the existing ChatGPT speed-profile report. Automated verification:
 `./gradlew check installDist` (228 JVM tests, zero failures, eight opt-in integration tests skipped),
 including 24 shared-viewer JavaScript tests. Local capture/report files and screenshots are under ignored `output/`.
+
+## Cache and thread-state follow-up
+
+The small amount of visible I/O wait in the overview is not evidence of a failed cache flush:
+
+- Residency fell from 7,324 pages before eviction to zero after eviction, and was still zero at
+  the final pre-launch check. This proves the checked guest app-file pages were nonresident at
+  those checks, not that the host/controller cache was cold or that files remained cold after launch.
+- In the 3,915.049 ms startup window, the main thread had 86 I/O-wait intervals totaling
+  141.831 ms (3.62% of startup). Median wait was 0.920 ms, maximum 9.581 ms; 49 waits were under 1 ms.
+  Every uninterruptible state had a known I/O-wait flag. Other app threads accumulated 224.638 ms
+  of I/O wait; concurrent thread times must not be added to claim startup wall-time cost.
+- ART's 11 advice spans covered 90.891 MiB. Cache insertions totaling 89.063 MiB coincided
+  with those spans, with no overlapping main-thread I/O wait. This is consistent with asynchronous
+  prefetch, not proof of individual insertion causality. VDEX had 81.766 MiB of cache insertions
+  but only 21 major demand faults (351 demand faults overall).
+- After startup began but before the first app fault, system processes inserted another
+  178 Snapchat APK pages (2.781 MiB). Post-launch warming is distinct from residual pre-launch cache.
+- The guest block-device trace includes 119.645 MiB of read-ahead-tagged request-issue bytes on
+  device 64800 during startup. This is system-wide guest-device context, not exact app-file I/O
+  attribution or measured physical media traffic.
+
+Queries use startup bounds `[2113662077132, 2117577125759)` nanoseconds and PID 4671.
+For example, run this against the associated `faults.pftrace`:
+
+```sql
+SELECT s.state, s.io_wait, COUNT(*) AS spans,
+       SUM(MIN(s.ts+s.dur,2117577125759)-MAX(s.ts,2113662077132))/1e6 AS ms
+FROM thread_state s JOIN thread t USING(utid)
+WHERE t.tid=4671 AND s.dur>=0 AND s.ts<2117577125759
+  AND s.ts+s.dur>2113662077132
+GROUP BY 1,2 ORDER BY ms DESC;
+```
+
+The main-thread states sum to 3,381.947 ms; approximately 533 ms of the startup interval precedes
+the thread's appearance. The 3.62% figure uses the full startup interval, not just the thread's lifetime.
+The reproducible query bundle and supplementary HTML audit remain beside the local capture as
+`cache-wait-audit.sql` and `cache-audit.html`.
+
+### Kernel blocked-function symbols
+
+The original config omitted `symbolize_ksyms`, leaving blocked-function names unavailable.
+mperf now enables `symbolize_ksyms: true` whenever it selects `sched/sched_blocked_reason`.
+This fixes names, not I/O-wait classification or wait counts. As documented by
+[Perfetto](https://perfetto.dev/docs/learning-more/symbolization), kernel symbols must be resolved
+on-device during recording; regenerating the old report cannot recover them.
+
+Full `./gradlew check installDist` passed after the fix. A fresh five-second scheduling smoke trace
+on the rooted Android 16 emulator contained resolved blocked functions, including
+`folio_wait_bit_common`, `worker_thread`, and `lock_sock_nested`. No manual kernel-security
+setting changes were needed. This was a symbolization test, not a new cold Snapchat benchmark.
+
+Four subsequent strict Snapchat capture attempts were rejected before launch for residual APK
+residency (62, 62, 28, and 405 pages), including a reboot and a settled retry. Read-only APK mappings
+in system processes were present, but this does not establish whether pages resisted reclamation
+or were reread during the check interval. The collector preserved the failure evidence and did not
+relax the zero-page threshold. The earlier successful capture above remains the report under review.

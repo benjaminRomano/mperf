@@ -26,11 +26,26 @@ class AndroidIoTest {
         assertTrue("ftrace_events: \"block/block_rq_issue\"" in config)
         assertFalse("ftrace_events: \"sched/sched_switch\"" in config)
         assertFalse("ftrace_events: \"block/block_rq_complete\"" in config)
+        assertFalse("symbolize_ksyms" in config)
         assertTrue("ftrace_events: \"ftrace/print\"" in config)
         assertEquals(sha256(output.resolve("io-ftrace.config")), metadata["trace_config_sha256"])
         assertTrue(Files.isRegularFile(output.resolve("io-event-formats/block-block_rq_issue.txt")))
         val evidence = metadata["io_capture"].toString()
         assertTrue("invalid_format" in evidence && "unavailable" in evidence && "absent" in evidence)
+    }
+
+    @Test fun `blocked reason events request record time kernel symbolization`() {
+        val config =
+            AndroidIo.prepare(output, mutableMapOf(), "ftrace_config { }") { command ->
+                if ("sched_blocked_reason" in command) {
+                    CommandResult(0, "name: sched_blocked_reason\nfield:unsigned long caller;\n", "")
+                } else {
+                    CommandResult(44, "", "")
+                }
+            }
+        assertTrue("ftrace_events: \"sched/sched_blocked_reason\"" in config)
+        assertTrue("symbolize_ksyms: true" in config)
+        assertEquals(config, Files.readString(output.resolve("io-ftrace.config")))
     }
 
     @Test fun `exports preserve independent system block events and clipped app states without inferred ownership`() {

@@ -74,7 +74,14 @@ internal object AndroidIo {
         val marker =
             Regex("ftrace_config\\s*\\{").find(baseConfig)
                 ?: error("Missing ftrace_config for optional I/O evidence")
-        val additions = selected.joinToString("") { "\n            ftrace_events: \"$it\"" }
+        val additions =
+            buildString {
+                if ("sched/sched_blocked_reason" in selected) {
+                    // Kernel caller addresses must be symbolized on-device while recording.
+                    append("\n            symbolize_ksyms: true")
+                }
+                selected.forEach { append("\n            ftrace_events: \"$it\"") }
+            }
         val config = baseConfig.substring(0, marker.range.last + 1) + additions + baseConfig.substring(marker.range.last + 1)
         Files.writeString(output.resolve("io-ftrace.config"), config)
         metadata["trace_config_sha256"] = sha256(output.resolve("io-ftrace.config"))
