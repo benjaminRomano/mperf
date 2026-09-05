@@ -93,27 +93,27 @@ fun declaredFaultResources(): Set<String> =
         "faults-engine/manifest.txt"
 
 tasks.processResources {
-    // Local interpreter caches must never become shipped resources. The manifest is the complete allowlist.
-    exclude("faults-engine/**/.venv/**", "faults-engine/**/__pycache__/**", "faults-engine/**/*.pyc")
+    // Ship only the explicitly declared native helpers and offline viewer assets.
     val declared = declaredFaultResources()
     filesMatching("faults-engine/**") {
         if (path !in declared) exclude()
     }
 }
 
-val verifyFaultResources by tasks.registering {
-    group = "verification"
-    description = "Reject undeclared fault-engine resources, including local Python environments"
-    dependsOn(tasks.processResources)
-    doLast {
-        val root = tasks.processResources.get().destinationDir
-        val actual = fileTree(root.resolve("faults-engine")).files.map { it.relativeTo(root).invariantSeparatorsPath }.toSet()
-        val declared = declaredFaultResources()
-        check(actual == declared) {
-            "Fault resource mismatch: unexpected=${actual - declared}, missing=${declared - actual}"
+val verifyFaultResources =
+    tasks.register("verifyFaultResources") {
+        group = "verification"
+        description = "Verify the packaged fault-engine resources match the manifest"
+        dependsOn(tasks.processResources)
+        doLast {
+            val root = tasks.processResources.get().destinationDir
+            val actual = fileTree(root.resolve("faults-engine")).files.map { it.relativeTo(root).invariantSeparatorsPath }.toSet()
+            val declared = declaredFaultResources()
+            check(actual == declared) {
+                "Fault resource mismatch: unexpected=${actual - declared}, missing=${declared - actual}"
+            }
         }
     }
-}
 
 tasks.named("jar") { dependsOn(verifyFaultResources) }
 tasks.named("shadowJar") { dependsOn(verifyFaultResources) }

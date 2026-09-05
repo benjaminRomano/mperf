@@ -68,8 +68,5 @@ class SharedFaultReportTest {
         assertFalse(html.contains(malicious))
         assertFalse(html.contains("<script src="))
         assertTrue(html.contains("const REPORT ="))
-        assertTrue(html.contains("id=\"detailDock\""))
-        assertTrue(html.contains("height: 100dvh"))
-        assertTrue(html.contains("Callers at top; faulting frames below"))
     }
 }

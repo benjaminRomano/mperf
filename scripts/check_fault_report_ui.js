@@ -189,4 +189,4 @@ async (page) => {
     checks:
       "single-file coordinates, counts, stable indices, shared range, deltas, exact selection, flame weights, empty filters, narrow layout",
   };
-};
+}

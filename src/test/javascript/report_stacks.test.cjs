@@ -110,20 +110,6 @@ test("first touch is earliest time, not input order or an inferred duration", ()
   assert.equal(result.children[0].duration, undefined);
 });
 
-test("chronological windows use filtered offsets and limit zero means all", () => {
-  const events = Array.from({ length: 6 }, (_, i) => event(i, [frame("root")]));
-  assert.deepEqual(
-    buildChronological(events, { start: 2, limit: 2 }).events.map((e) => e.id),
-    [2, 3],
-  );
-  assert.equal(
-    buildChronological(events, { start: 2, limit: 0 }).events.length,
-    4,
-  );
-  assert.equal(buildChronological(events, { start: 999, limit: 10 }).start, 5);
-  assert.equal(buildChronological(events, { start: -2, limit: 1 }).start, 0);
-});
-
 test("empty selections and stacks named like missing placeholders remain distinct", () => {
   assert.equal(buildChronological([]).cells.length, 0);
   assert.equal(buildFlame([]).count, 0);
@@ -151,7 +137,6 @@ test("large captures avoid spread-argument limits and retain the exact denominat
   assert.equal(result.cells.length, 1);
   assert.equal(result.cells[0].count, 150000);
   assert.equal(result.cells[0].firstTouch, 0);
-  assert.equal(result.cells[0].lastTouch, 149999);
   assert.equal(buildFlame(events).children[0].count, 150000);
 });
 

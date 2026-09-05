@@ -19,14 +19,8 @@
     event.stack?.length ? event.stack.slice().reverse() : [missing];
   const timeOf = (event) => (Number.isFinite(event.time) ? event.time : null);
 
-  function buildChronological(events, { start = 0, limit = 0 } = {}) {
-    start = Math.max(
-      0,
-      Math.min(Math.max(0, events.length - 1), Math.floor(start) || 0),
-    );
-    limit = Math.max(0, Math.floor(limit) || 0);
-    const shown = events.slice(start, limit ? start + limit : undefined);
-    const stacks = shown.map(stackOf),
+  function buildChronological(events) {
+    const stacks = events.map(stackOf),
       interned = new Map();
     const prefixes = stacks.map((stack) => {
       let parent = 0;
@@ -43,22 +37,20 @@
       ),
       cells = [];
     for (let row = 0; row < depth; row++) {
-      for (let i = 0; i < shown.length;) {
+      for (let i = 0; i < events.length;) {
         if (!stacks[i][row]) {
           i++;
           continue;
         }
         let end = i + 1;
-        while (end < shown.length && prefixes[end][row] === prefixes[i][row])
+        while (end < events.length && prefixes[end][row] === prefixes[i][row])
           end++;
-        let firstTouch = null,
-          lastTouch = null;
+        let firstTouch = null;
         for (let index = i; index < end; index++) {
-          const time = timeOf(shown[index]);
+          const time = timeOf(events[index]);
           if (time !== null) {
             firstTouch =
               firstTouch === null ? time : Math.min(firstTouch, time);
-            lastTouch = lastTouch === null ? time : Math.max(lastTouch, time);
           }
         }
         cells.push({
@@ -68,12 +60,11 @@
           end,
           count: end - i,
           firstTouch,
-          lastTouch,
         });
         i = end;
       }
     }
-    return { events: shown, total: events.length, start, depth, cells };
+    return { events, depth, cells };
   }
 
   function buildFlame(events) {
@@ -82,7 +73,6 @@
       path,
       count: 0,
       firstTouch: null,
-      lastTouch: null,
       representative: null,
       children: [],
       byKey: new Map(),
@@ -103,8 +93,6 @@
           current.firstTouch === null
             ? time
             : Math.min(current.firstTouch, time);
-        current.lastTouch =
-          current.lastTouch === null ? time : Math.max(current.lastTouch, time);
       }
     }
     for (const event of events) {
@@ -141,7 +129,7 @@
     return current;
   }
 
-  function create({ canvas, scroll, tooltip, onSelect, onRange, onFocus }) {
+  function create({ canvas, scroll, tooltip, onSelect, onFocus }) {
     const ctx = canvas.getContext("2d");
     let state,
       model,
@@ -177,7 +165,7 @@
       listeners.push([type, callback, options]);
     }
     function callback(name, ...args) {
-      const handler = state?.[name] || { onRange, onFocus, onSelect }[name];
+      const handler = state?.[name] || { onFocus, onSelect }[name];
       if (handler) handler(...args);
     }
     function fit(text, available) {
@@ -316,7 +304,7 @@
           height - 12,
         );
       } else {
-        if (changed || !model) model = buildChronological(state.events, state);
+        if (changed || !model) model = buildChronological(state.events);
         size(model.depth);
         const column = width / (Math.max(1, model.events.length) * span);
         const origin = (-left * width) / span;
@@ -362,7 +350,7 @@
           ctx.fillStyle = "#52616b";
           ctx.textAlign = tick === ticks - 1 ? "right" : "left";
           const tx = tick === ticks - 1 ? width - 4 : x + 4;
-          ctx.fillText(`#${model.start + i + 1}`, tx, y + 19);
+          ctx.fillText(`#${i + 1}`, tx, y + 19);
           ctx.fillText(
             timeOf(event) === null
               ? "time unavailable"
@@ -413,7 +401,7 @@
       const item = hit.node || hit.cell,
         first = item.firstTouch;
       const range = hit.cell
-        ? `Filtered faults ${model.start + item.start + 1}–${model.start + item.end}`
+        ? `Filtered faults ${item.start + 1}–${item.end}`
         : "Aggregated path";
       const lines = [
         hit.frame.label,
@@ -425,7 +413,7 @@
       ];
       if (state.mode !== "flame")
         lines.push(
-          `Selected column: #${model.start + index + 1} · captured #${sample.order ?? sample.id} · ${sample.major ? "major" : "minor"}`,
+          `Selected column: #${index + 1} · captured #${sample.order ?? sample.id} · ${sample.major ? "major" : "minor"}`,
         );
       if (sample)
         lines.push(

@@ -87,9 +87,7 @@ internal object AndroidBinary {
                 at: Long,
                 index: Int,
             ): Long =
-                if (index <
-                    2
-                ) {
+                if (index < 2) {
                     b.u32(at + index * 4)
                 } else if (wide) {
                     b.u64(at + 8 + (index - 2) * 8)
