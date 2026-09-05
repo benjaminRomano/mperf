@@ -4,7 +4,40 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.1.1] - 2026-09-05
+
+### Added
+
+- Added `mperf faults android` and `mperf faults ios` for cold-start page-fault collection, strict cache-residency
+  evidence, file and section attribution, cross-capture comparison, symbolicated iOS fault stacks, and self-contained
+  interactive HTML reports.
+- Added support for Android 10 and modern sectioned VDEX files. VDEX sources remain whole in rankings and plots, with
+  original DEX boundaries shown only after full ART/APK location-checksum verification.
+- Added Android DWARF fault-stack correlation by exact event identity, verified `speed-profile` preparation,
+  OAT method attribution, and optional Perfetto advice, block-I/O, and thread-state evidence.
+- Added a shared offline fault explorer with time/address and fault-index/delta plots, chronological stacks,
+  flame graphs, an ordered fault list, a resizable detail dock, and local opening of associated Perfetto traces.
+
+### Changed
+
+- Implemented fault capture orchestration, preprocessing, and report generation in Kotlin; fault commands no longer
+  require Python. Native helpers remain for capabilities unavailable from the platform command-line tools.
+- Removed obsolete stack paging code and its test, unused stack metadata and callbacks, redundant markup assertions,
+  and obsolete Python-cache packaging exclusions. Updated fault-resource task registration for Gradle 9.6.
+
+### Fixed
+
+- Fixed Android collection on noncontiguous CPU topologies by parsing and validating the exact online CPU list from
+  sysfs instead of assuming CPU identifiers are continuous.
+- Fixed Android page-cache evidence omitting background and kernel-worker insertions for app-owned device/inode pairs,
+  package-prefix attribution collisions, disappearing optional files, post-launch residency races, stopped-process
+  `pidof` handling, and saved-capture reprocessing without a locally configured package.
+- Fixed Android report source ordering to rank major faults first, retain whole VDEX sources, show verified embedded
+  DEX boundaries, preserve full source paths in hover details, and avoid WebGL-only scatter rendering.
+- Fixed missing kernel blocked-function symbols by enabling on-device symbolization for supported blocked-reason events.
+- Fixed high-bit Android fault addresses failing report generation or losing exact DWARF matches after CSV serialization.
+- Fixed iOS startup ordering to wait for recorder readiness before launch, explicit app/bundle selection, recording-window
+  validation, and attribution of app-owned framework and extension code.
 
 ## [1.1.0] - 2026-07-13
 

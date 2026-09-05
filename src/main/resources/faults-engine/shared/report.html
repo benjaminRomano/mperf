@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>__TITLE__</title>
+    <link rel="icon" href="data:," />
+    <style>
+      __STYLE__
+    </style>
+  </head>
+  <body>
+    <header class="profile-header">
+      <h1>__TITLE__</h1>
+      <p id="summary"></p>
+      <p id="cacheStatus"></p>
+      <p id="perfettoStatus" role="status" hidden></p>
+    </header>
+    <div class="toolbar">
+      <label
+        >Run
+        <select id="run"></select
+      ></label>
+      <label
+        >Faults
+        <select id="kind">
+          <option value="major">Major only</option>
+          <option value="all">Major + minor</option>
+          <option value="minor">Minor only</option>
+        </select></label
+      >
+      <label
+        >Thread
+        <select id="thread"></select
+      ></label>
+      <label id="sectionFilter"
+        >Region
+        <select id="section"></select
+      ></label>
+      <label class="search"
+        >Find
+        <input
+          id="search"
+          type="search"
+          placeholder="File, DEX, class, or stack frame"
+      /></label>
+      <button id="reset">Reset filters</button>
+      <button id="openPerfetto" title="Open this run's startup trace in Perfetto; trace data stays in your browser">Open in Perfetto</button>
+      <a id="downloadTrace" download hidden>Trace file</a>
+    </div>
+    <div class="selection-bar">
+      <span id="selectionCount" aria-live="polite"></span
+      ><span id="rangeStatus"></span
+      ><button id="clearRange" hidden>Clear range</button>
+    </div>
+    <main class="workspace">
+      <aside class="source-panel">
+        <div class="panel-heading">
+          <h2 id="sourceTitle">Fault sources</h2>
+          <button id="allSources">All</button>
+        </div>
+        <p id="sourceNote"></p>
+        <select id="source" hidden aria-label="Selected source"></select>
+        <div class="source-scroll">
+          <table class="source-table">
+            <thead>
+              <tr>
+                <th>Source</th>
+                <th>Major</th>
+                <th>Minor</th>
+              </tr>
+            </thead>
+            <tbody id="sources"></tbody>
+          </table>
+        </div>
+        <details class="measurement">
+          <summary>Measurement details</summary>
+          <ul id="notes"></ul>
+          <pre id="provenance"></pre>
+        </details>
+      </aside>
+      <div class="analysis-panel">
+        <nav class="tabs" role="tablist" aria-label="Analysis view">
+          <button
+            role="tab"
+            id="tab-pages"
+            aria-controls="panel-pages"
+            data-tab="pages"
+            aria-selected="true"
+          >
+            Page faults
+          </button>
+          <button
+            role="tab"
+            id="tab-stacks"
+            aria-controls="panel-stacks"
+            data-tab="stacks"
+            aria-selected="false"
+          >
+            Stack chart
+          </button>
+          <button
+            role="tab"
+            id="tab-flame"
+            aria-controls="panel-stacks"
+            data-tab="flame"
+            aria-selected="false"
+          >
+            Flame graph
+          </button>
+          <button
+            role="tab"
+            id="tab-sites"
+            aria-controls="panel-sites"
+            data-tab="sites"
+            aria-selected="false"
+          >
+            Fault list
+          </button>
+        </nav>
+        <p id="selectedSource"></p>
+        <section id="panel-pages" role="tabpanel" aria-labelledby="tab-pages">
+          <div class="view-toolbar">
+            <label
+              >Y axis
+              <select id="view">
+                <option value="address">Virtual page address</option>
+                <option value="offset">File page index</option>
+                <option value="lanes">Files</option>
+                <option value="delta-address">Δ virtual page</option>
+                <option value="delta-file">Δ file page</option>
+              </select></label
+            >
+            <label
+              >X axis
+              <select id="axis">
+                <option value="time">Elapsed time</option>
+                <option value="order">Fault index</option>
+              </select></label
+            >
+            <button
+              id="useRange"
+              title="Apply the plot's horizontal zoom range to every view"
+            >
+              Filter to zoom
+            </button>
+            <button id="resetZoom">Reset zoom</button>
+          </div>
+          <p id="accessNote" class="view-note"></p>
+          <div class="plot-scroll"><div id="access" class="plot"></div></div>
+          <p id="locality" class="view-note"></p>
+        </section>
+        <section
+          id="panel-stacks"
+          role="tabpanel"
+          aria-labelledby="tab-stacks"
+          hidden
+        >
+          <p id="stackCoverage" class="view-note"></p>
+          <p id="stackCount" hidden></p>
+          <div
+            id="stackScroll"
+            tabindex="0"
+            aria-label="Scrollable fault stacks"
+          >
+            <canvas
+              id="stacks"
+              tabindex="0"
+              aria-label="Fault call stacks"
+            ></canvas>
+          </div>
+          <p id="stackLegend" class="view-note">
+            App · blue; system · gray; unresolved · hatched. Hover for full
+            names.
+          </p>
+        </section>
+        <section
+          id="panel-sites"
+          role="tabpanel"
+          aria-labelledby="tab-sites"
+          hidden
+        >
+          <p class="view-note">
+            Faults in capture order. Select a fault to inspect its full stack.
+          </p>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Fault #</th>
+                  <th>Kind</th>
+                  <th>Time (ms)</th>
+                  <th>Faulting user frame</th>
+                  <th id="siteSourceTitle">Read source</th>
+                </tr>
+              </thead>
+              <tbody id="sites"></tbody>
+            </table>
+          </div>
+        </section>
+        <section class="event-detail" id="detailDock">
+          <div
+            id="resizeDetail"
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Resize selected fault details"
+            aria-controls="detail"
+            tabindex="0"
+            title="Drag to resize. Arrow keys adjust height."
+            hidden
+          ></div>
+          <button
+            id="toggleDetail"
+            aria-expanded="false"
+            aria-controls="detail"
+          >
+            Selected fault <span id="detailCaption">· expand</span>
+          </button>
+          <div id="detail" aria-live="polite" hidden>
+            Click a point or chronological stack column to inspect a fault.
+          </div>
+        </section>
+      </div>
+    </main>
+    <noscript
+      >This report requires JavaScript. CSV data and metadata remain available
+      in the capture directory.</noscript
+    >
+    <div id="tooltip"></div>
+    <script>
+      __PLOTLY__;
+    </script>
+    <script>
+      const REPORT = __DATA__;
+    </script>
+    <script>
+      __MODEL__;
+    </script>
+    <script>
+      __STACKS__;
+    </script>
+    <script>
+      __PERFETTO__;
+    </script>
+    <script>
+      __SCRIPT__;
+    </script>
+  </body>
+</html>

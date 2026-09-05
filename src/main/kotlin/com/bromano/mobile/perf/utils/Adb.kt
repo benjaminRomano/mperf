@@ -126,7 +126,9 @@ class Adb(
      * @return null if process is not found
      */
     fun pidof(processName: String): String? =
-        shell("pidof $processName", withRoot = true).split("\\s+".toRegex()).firstOrNull { it.isNotBlank() }
+        shell("pidof $processName", withRoot = true, ignoreErrors = true)
+            .split("\\s+".toRegex())
+            .firstOrNull { it.isNotBlank() }
 
     fun deleteSystemSetting(property: String): String = shell("settings delete system $property")
 

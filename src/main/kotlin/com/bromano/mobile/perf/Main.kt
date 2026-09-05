@@ -3,9 +3,14 @@ package com.bromano.mobile.perf
 import com.bromano.mobile.perf.commands.android.AndroidCollectCommand
 import com.bromano.mobile.perf.commands.android.AndroidCommand
 import com.bromano.mobile.perf.commands.android.AndroidStartCommand
+import com.bromano.mobile.perf.commands.faults.AndroidFaultsCommand
+import com.bromano.mobile.perf.commands.faults.FaultsCommand
+import com.bromano.mobile.perf.commands.faults.IosFaultsCommand
 import com.bromano.mobile.perf.commands.ios.ConvertCommand
 import com.bromano.mobile.perf.commands.ios.IosCommand
 import com.bromano.mobile.perf.commands.ios.IosStartCommand
+import com.bromano.mobile.perf.faults.BundledFaultEngine
+import com.bromano.mobile.perf.faults.FaultEngine
 import com.bromano.mobile.perf.profilers.ProfilerExecutor
 import com.bromano.mobile.perf.profilers.ProfilerExecutorImpl
 import com.bromano.mobile.perf.profilers.instruments.InstrumentsProfiler
@@ -82,8 +87,13 @@ fun createRootCommand(
     config: Config,
     profilerExecutor: ProfilerExecutor,
     profileOpener: ProfileOpener,
+    faultEngine: FaultEngine = BundledFaultEngine(),
 ) = MobilePerfCommand()
     .subcommands(
+        FaultsCommand().subcommands(
+            AndroidFaultsCommand(shell, config, faultEngine),
+            IosFaultsCommand(shell, config, faultEngine),
+        ),
         IosCommand().subcommands(
             IosStartCommand(shell, config, profilerExecutor),
             ConvertCommand(profileOpener),

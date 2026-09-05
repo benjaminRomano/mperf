@@ -36,6 +36,7 @@ class DocsGeneratorTest {
         assertContains(md, "**Commands**\n\n| Name | Description |")
         assertContains(md, "| ios |  |")
         assertContains(md, "| android |  |")
+        assertContains(md, "| faults | Analyze startup page-fault patterns on Android or iOS |")
     }
 
     @Test
@@ -91,5 +92,22 @@ class DocsGeneratorTest {
         assertContains(md, "### convert")
         assertContains(md, "| --input, -i | path | Input Instruments Trace |")
         assertContains(md, "| --output, -o | path | Output Path for gecko profile |")
+    }
+
+    @Test
+    fun `fault commands expose platform-specific capture controls`() {
+        val md = DocsGenerator.generateCliDocsMarkdown()
+
+        assertContains(md, "## faults")
+        assertContains(md, "| android | Collect exact Android startup faults and generate an interactive HTML report |")
+        assertContains(md, "| ios | Collect iOS startup VM faults and stacks with Instruments")
+        assertContains(
+            md,
+            "| --max-resident-pages | int | Maximum verified resident app-file pages allowed before launch (strict default: 0) |",
+        )
+        assertContains(md, "| --reboot-before-collect |  | Reboot the target before cache eviction and collection |")
+        assertContains(md, "| --overwrite |  | Replace a non-empty output owned by mperf faults |")
+        assertContains(md, "| --cache-policy | text | Cache policy: auto, purge, pressure, reboot, or none |")
+        assertContains(md, "| --require-cold-cache |  | Fail unless Simulator app-file residency confirms eviction |")
     }
 }

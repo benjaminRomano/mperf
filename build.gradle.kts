@@ -82,6 +82,42 @@ sourceSets.main {
     )
 }
 
+val faultEngineManifest = layout.projectDirectory.file("src/main/resources/faults-engine/manifest.txt")
+
+fun declaredFaultResources(): Set<String> =
+    faultEngineManifest.asFile
+        .readLines()
+        .filter(String::isNotBlank)
+        .map { "faults-engine/$it" }
+        .toSet() +
+        "faults-engine/manifest.txt"
+
+tasks.processResources {
+    // Ship only the explicitly declared native helpers and offline viewer assets.
+    val declared = declaredFaultResources()
+    filesMatching("faults-engine/**") {
+        if (path !in declared) exclude()
+    }
+}
+
+val verifyFaultResources =
+    tasks.register("verifyFaultResources") {
+        group = "verification"
+        description = "Verify the packaged fault-engine resources match the manifest"
+        dependsOn(tasks.processResources)
+        doLast {
+            val root = tasks.processResources.get().destinationDir
+            val actual = fileTree(root.resolve("faults-engine")).files.map { it.relativeTo(root).invariantSeparatorsPath }.toSet()
+            val declared = declaredFaultResources()
+            check(actual == declared) {
+                "Fault resource mismatch: unexpected=${actual - declared}, missing=${declared - actual}"
+            }
+        }
+    }
+
+tasks.named("jar") { dependsOn(verifyFaultResources) }
+tasks.named("shadowJar") { dependsOn(verifyFaultResources) }
+
 sourceSets.named("jmh") {
     resources.srcDir("src/test/resources")
 }
@@ -116,6 +152,20 @@ tasks {
         mainClass.set("com.bromano.mobile.perf.DocsGenerator")
         classpath = sourceSets["main"].runtimeClasspath
     }
+
+    register<Exec>("testFaultViewer") {
+        group = "verification"
+        description = "Run shared fault viewer model and navigation regression tests"
+        commandLine(
+            "node",
+            "--test",
+            "src/test/javascript/report_model.test.cjs",
+            "src/test/javascript/report_stacks.test.cjs",
+            "src/test/javascript/report_perfetto.test.cjs",
+        )
+    }
+
+    check { dependsOn("testFaultViewer", verifyFaultResources) }
 
     // Build a runnable fat JAR via: ./gradlew shadowJar
     named<ShadowJar>("shadowJar") {

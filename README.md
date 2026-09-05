@@ -11,6 +11,7 @@ platform profilers and supports collection over both ad-hoc app sessions and sin
 - Perfetto
 - Simpleperf
 - Instruments
+- Startup page faults on Android and iOS
 
 **Collection Modes**
 
@@ -27,7 +28,8 @@ platform profilers and supports collection over both ad-hoc app sessions and sin
 
 - Java 21+
 - Android SDK Platform‑Tools (`adb` on PATH)
-- `python3`, `tar`, and `gzip` on PATH
+- `tar` and `gzip` for installation
+- Python 3 for the installer helper, Simpleperf Firefox conversion, and optional trace server; not needed by `faults`
 - Full Xcode installation with an active developer directory (for `xctrace`, Instruments, and Simulator)
 - macOS or Linux
 
@@ -90,6 +92,18 @@ iperf start -b com.example.app --template "Time Profiler" --ui instruments
 
 The trace can be opened directly in Instruments, or exported for Firefox Profiler / Perfetto via the `--ui` flag.
 
+**Android: collect and visualize startup page faults**
+
+```bash
+mperf faults android -p com.example.app --reboot-before-collect
+```
+
+**iOS Simulator: collect startup VM faults and stacks**
+
+```bash
+mperf faults ios --app path/to/MyApp.app --require-cold-cache --allow-host-pressure
+```
+
 ## Usage
 
 Full usage details can be found in [CLI Reference Docs](/docs/cli.md)
@@ -99,6 +113,154 @@ Full usage details can be found in [CLI Reference Docs](/docs/cli.md)
 - `ios start` — record an Instruments session for a running app
 - `android start` — record an ad-hoc session for a running Android app
 - `android collect` — run a single Macrobenchmark test iteration and collect a trace
+- `faults android` — collect exact Android startup faults and generate an interactive report
+- `faults ios` — collect iOS startup VM events and stacks and generate an interactive report
+
+### Startup Page Faults
+
+`mperf faults` captures fault order, file and section attribution, major/minor classification, cache evidence, and
+interactive Plotly visualizations. Reports are written to `artifacts/faults/` by default. The first run extracts a
+versioned analysis engine into `~/.mperf/cache/faults-engine/`. Capture orchestration, trace preprocessing, VDEX/DEX
+validation, Instruments XML parsing, and report generation run in Kotlin. No Python or `uv` runtime is needed for
+either fault command. Android and iOS use the same offline viewer and bundled Plotly assets.
+Android preprocessing downloads the host's pinned Perfetto v51.2 native trace processor on first use, verifies its
+size and SHA-256, and reuses the verified cache afterward. That first download requires network access.
+
+The report stays within the browser viewport. Sources, plots, and the collapsible selected-fault dock scroll
+independently. Stack charts start with all matching faults visible, with callers at the top and faulting frames below.
+Pinch (or Ctrl+wheel) zooms around the pointer; WASD pans without changing selection; Escape resets the viewport.
+The fault list retains one row per event: click a blue frame name to inspect its complete captured stack.
+Android's all-source view excludes anonymous/unattributed pages from the analysis panels while retaining raw capture
+totals. File-page coordinates are available only for an individual source; the Files axis compares separate files.
+
+On Android, the collector uses kernel `perf_event_open` page-fault events and `PERF_RECORD_MMAP2` mappings. It
+attributes each fault to the mapped file and file offset, including APK entries and whole ODEX/VDEX files when pulled
+artifacts are available. Android 10 and modern sectioned VDEX files are supported. Original `classes*.dex` boundaries
+are labeled only when every ART-stored DEX location checksum matches the corresponding APK entry; an unverified VDEX
+is never guessed. Page-cache events include the app process and background or kernel-worker insertions targeting the
+exact device/inode identities of app-owned files. These events are correlated I/O evidence, not proof that a specific
+cache insertion caused a later fault.
+
+The per-fault rows come from userspace events actually delivered by the perf subsystem. They are not reconstructed
+from `/proc/<pid>/stat` or process-level `min_flt`/`maj_flt` counters, so the report can contain fewer rows than those
+aggregate kernel counters. Conversely, the page-cache tracepoint is a different signal: it records cache insertions
+for the app process and for background workers operating on the app's exact device/inode pairs. Those insertions are
+not minor faults and are not added to the fault total.
+
+Collection requires an emulator or device where the collector can run as root; a `userdebug` or `eng` build is
+recommended. The command reads the exact online CPU list from sysfs, drops page cache through the privileged shell,
+verifies app-file residency with `mincore` immediately before launch, and fails a strict cold-cache run when the
+configured residency limit is exceeded. The default limit is zero. Some Android 16 emulator images keep a small,
+repeatable set of APK pages resident even after global cache drop and file-scoped eviction; in that case the command
+fails rather than claiming a fully cold run. Use an explicit small `--max-resident-pages` tolerance only when that
+residual state is acceptable. The report shows the measured page count, threshold, per-phase residency, and warnings.
+`--reboot-before-collect` waits for a new boot ID and completed boot before preparation. If another process retains
+read-only installed APK mappings, `--reclaim-mapped-apks` opts into bounded page-out advice on those exact mappings.
+This affects other processes and is not a guarantee of eviction: the same zero-residency check must still pass.
+Cold here means the verified app-file page cache, not a guarantee about the emulator host cache, storage controller,
+system libraries, or pages that other processes may refill after the final check.
+Reprocess a saved capture with `--skip-collect` (the package identity is read from the capture), or compare captures
+with `--compare`.
+
+```bash
+mperf faults android \
+  --package com.example.app \
+  --device emulator-5554 \
+  --reboot-before-collect \
+  --native-stacks
+```
+
+`--native-stacks` adds frame-pointer instruction-pointer callchains to the same perf record as each exact fault
+address, timestamp, PID/TID, and major/minor classification. Because the system-wide collector is ready before the
+app is created, these callchains include the beginning of startup. The report maps user frames to the file and offset
+active at that timestamp; available ELF symbols enrich native names. Managed/JIT/interpreter frames and native code
+built without usable frame pointers may be incomplete. Lost, throttled, overflowed, or malformed records invalidate
+the capture rather than silently producing a clean report.
+On Linux kernels that predate `PERF_FORMAT_LOST`, mperf records that only
+ring-delivered loss records were available; the report calls out that weaker
+completeness guarantee instead of claiming counter-backed zero loss.
+
+For DWARF/ART stacks alongside exact fault addresses, use the optional system-wide companion recorder:
+
+```bash
+mperf faults android -p com.example.app --native-stacks --dwarf-stacks --reboot-before-collect
+```
+
+Both recorders start before launch. Simpleperf does not expose the fault address through its current CLI, so mperf
+retains the native address/mapping stream. It enriches a native major fault only when the companion has a unique,
+exact match on PID, TID, nanosecond timestamp, instruction address, and CPU, with verified clock, boot, capture hashes,
+and zero loss. No nearest-time or ordinal stitching is performed. Invalid/unbound companions are omitted with an
+explicit warning, without invalidating usable native data. A valid independent stack stream is not relabeled as exact
+page attribution when native matches are unavailable. DWARF recording is intrusive and may lose samples on large apps.
+
+A page fault is a memory exception, not necessarily a syscall. Captured kernel frames are retained when supplied;
+mperf does not invent a syscall frame. Major-fault count is not a count of storage reads or all pages read. Readahead,
+explicit reads, and ART advice can populate many pages before their later minor faults. Whole-file VDEX views include
+all metadata, and modern VDEX files may contain no DEX payload at all: the original code can remain in APK DEX entries.
+
+On iOS, the command uses Instruments' Virtual Memory Trace and includes symbolicated fault stacks in a chronological,
+Firefox-Profiler-style stack view. For Simulator captures, Instruments observes the macOS host process: the report
+filters to the app PID, and its storage behavior must not be interpreted as physical-device behavior. “Major” means a
+file-backed page-in operation; “minor” groups cache hits, zero-fill, copy-on-write, and decompression events. These are
+analysis buckets derived from Instruments operations, not Darwin kernel fault labels.
+
+The recorder is started first and the app is not launched until `xctrace` emits its explicit
+`--notify-tracing-started` notification. A bounded readiness timeout aborts and reaps the recorder on failure. The
+capture records host-monotonic recorder-ready and launch timestamps so this ordering can be audited after the fact.
+Every retained row is filtered by the numeric launch PID and process identity, guarding against PID reuse. The
+report attributes frames to the installed application bundle root, including bundled frameworks and `.appex`
+extensions; similarly structured binaries from another app are excluded. Code-ordering candidates require the
+faulting binary itself—not merely a caller deeper in the stack—to be app-bundle owned.
+
+Simulator cache verification inventories app-bundle files and checks their residency with `mincore` immediately before
+launch. `auto` first attempts the host `purge` utility and can use bounded memory pressure when
+`--allow-host-pressure` is supplied. `--require-cold-cache` rejects a run unless eviction is confirmed. iOS does not
+provide a supported global page-cache drop on physical devices; physical-device runs can reboot or use the included
+best-effort signed pressure helper, but cannot provide the same strict cache guarantee as a rooted Android target or
+Simulator residency check.
+
+```bash
+mperf faults ios \
+  --app path/to/MyApp.app \
+  --device booted \
+  --cache-policy auto \
+  --allow-host-pressure \
+  --require-cold-cache
+```
+
+The HTML reports are self-contained and show the all-file address/time pattern, per-file timelines, sequentiality,
+APK/DEX and VDEX/ODEX attribution, major/minor evidence, comparison views, and ordered fault callchains. iOS read-source
+and section attribution uses UUID-verified Mach-O images (for example, `__TEXT` and `__DATA`), not the caller binary.
+Android retains timestamped native mappings and optional identity-verified DWARF enrichment. See the
+[`faults` CLI reference](docs/cli.md#faults) or run either platform command with `--help` for the full option set.
+The Android report's **Open in Perfetto** button opens the selected run's `faults.pftrace`, including startup
+context collected in that session. Keep the capture directories alongside comparison reports and serve them
+over HTTP for one-click loading. Trace bytes pass directly between browser windows, without uploading them;
+local `file://` reports offer manual opening instead. The HTML itself remains usable without the trace file.
+Drag the divider above **Selected fault** to resize its callstack panel. When the divider is focused,
+Arrow Up/Down resize it; Home/End select the minimum/maximum height. Collapsing preserves the chosen height.
+
+Android captures default to `--compilation speed-profile`: verify the actual ART filter for each code-bearing
+installed APK, using the target instruction set. If necessary, request profile-guided compilation; command
+`Success` alone is not accepted. If no usable device profile produces `speed-profile`, mperf inspects/extracts
+the APK's `assets/dexopt/baseline.prof` and `.profm` as evidence and asks the app's AndroidX ProfileInstaller receiver
+to install/transcode its embedded baseline. The app is force-stopped again before recompilation and cache eviction.
+The capture fails if the receiver is absent/unsuccessful or ART still reports another filter; there is no full
+`speed` fallback. See [Android's baseline installation workflow](https://developer.android.com/topic/performance/baselineprofiles/manually-create-measure#sideload-baseline).
+This preparation can start the app process via a broadcast, before eviction, and retains app data and existing profiles.
+For deliberate reset/full-AOT comparisons use `--compilation as-is`; replaying saved captures never changes device state.
+Raw ART compilation dumps and profile-source evidence are retained before eviction and after recording.
+
+Compiled ODEX code is resolved with the device's `oatdump`, matching every DEX location checksum and the
+captured APK/ODEX/VDEX hashes. Selected faults show the DEX and compiled method containing the exact address,
+separately from other methods sharing that page and from the captured caller stack. Shared-code aliases stay
+ambiguous; obfuscated names require the app's R8 mapping to recover source names. Unsupported/malformed OAT
+metadata leaves attribution unavailable without discarding the trace.
+
+Add `--io-evidence` to record available block/scheduler events in the same Perfetto session and export ART advice,
+system-wide guest block events, and app thread states as CSVs. These streams measure different layers; do not
+equate page faults, advised bytes, read requests, or stall time. The native collector supplies exact fault addresses;
+Perfetto supplies startup and scheduling context, and Simpleperf supplies optional DWARF stacks.
 
 ### Perfetto (Default)
 

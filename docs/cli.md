@@ -9,8 +9,77 @@
 
 | Name | Description |
 |---|---|
+| faults | Analyze startup page-fault patterns on Android or iOS |
 | ios |  |
 | android |  |
+
+## faults
+**Options**
+
+| Name(s) | Metavar | Description |
+|---|---|---|
+| --help, -h |  | Show this message and exit |
+
+**Commands**
+
+| Name | Description |
+|---|---|
+| android | Collect exact Android startup faults and generate an interactive HTML report |
+| ios | Collect iOS startup VM faults and stacks with Instruments and generate an interactive HTML report |
+
+### android
+**Options**
+
+| Name(s) | Metavar | Description |
+|---|---|---|
+| --package, -p | text | Package name |
+| --activity | text | Launch activity; resolved automatically when omitted |
+| --compilation | (speed-profile\|as-is) | Prepare verified profile-guided AOT before eviction, or preserve compilation for explicit experiments |
+| --device, -d | text | ADB device serial |
+| --out, -o | path | Capture output directory |
+| --settle-ms | int | Collection time after startup completes |
+| --max-resident-pages | int | Maximum verified resident app-file pages allowed before launch (strict default: 0) |
+| --reboot-before-collect |  | Reboot the target before cache eviction and collection |
+| --native-stacks |  | Capture exact native/ART frame-pointer callchains with each fault |
+| --dwarf-stacks |  | Record system-wide major-fault DWARF/ART stacks; enrich only exact, verified event matches |
+| --reclaim-mapped-apks |  | Opt in to page-out advice on other processes' read-only installed APK mappings; strict cache checks remain |
+| --no-pull-artifacts, --pull-artifacts |  | Pull APK and ART files for section attribution |
+| --io-evidence |  | Capture available block I/O and scheduler events; export separate startup context CSVs |
+| --skip-collect |  | Reprocess and report an existing exact capture |
+| --overwrite |  | Replace a non-empty output owned by mperf faults |
+| --compare | path | Second capture directory |
+| --label | text | Primary capture label |
+| --compare-label | text | Comparison capture label |
+| --allow-incomparable |  | Allow an exploratory comparison despite provenance mismatches |
+| --no-open, --open |  | Open the generated HTML report |
+| --help, -h |  | Show this message and exit |
+
+### ios
+**Options**
+
+| Name(s) | Metavar | Description |
+|---|---|---|
+| --bundle, -b | text | Bundle identifier |
+| --app | path | Built .app bundle to install before capture |
+| --app-binary-name | text | Executable used to identify app stack frames |
+| --device, -d | text | Simulator or physical-device name/UDID |
+| --out, -o | path | Capture output directory |
+| --cache-policy | text | Cache policy: auto, purge, pressure, reboot, or none |
+| --require-cold-cache |  | Fail unless Simulator app-file residency confirms eviction |
+| --allow-host-pressure |  | Allow Simulator auto policy to fall back to memory pressure |
+| --allow-unconfirmed-cache |  | Continue when Simulator mincore cannot confirm eviction |
+| --residency-threshold | float | Maximum post-action Simulator app-file residency fraction |
+| --development-team | text | Apple development team for physical helper signing |
+| --pressure-fraction | float | Physical-device memory pressure fraction |
+| --pressure-megabytes | int | Fixed helper allocation in MiB |
+| --pressure-hold-seconds | int | How long the helper holds memory |
+| --settle-seconds | float | Analyzed startup window in seconds |
+| --time-limit | int | Maximum recording duration in seconds |
+| --app-argument | text | Argument passed to the target app |
+| --overwrite |  | Replace an owned mperf faults capture directory |
+| --skip-collect |  | Reprocess an existing capture |
+| --no-open, --open |  | Open the generated HTML report |
+| --help, -h |  | Show this message and exit |
 
 ## ios
 **Options**
