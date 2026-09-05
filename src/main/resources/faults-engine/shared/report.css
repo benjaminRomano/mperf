@@ -311,8 +311,24 @@ th {
   flex-direction: column;
 }
 .event-detail.open {
-  flex: 0 1 34%;
-  min-height: 90px;
+  flex: 0 0 var(--detail-height, 34%);
+  overflow: hidden;
+}
+#resizeDetail {
+  height: 7px;
+  flex-shrink: 0;
+  cursor: ns-resize;
+  touch-action: none;
+  background: #f3f4f6;
+}
+#resizeDetail:hover,
+#resizeDetail:focus-visible,
+#resizeDetail.dragging {
+  background: var(--accent);
+}
+body.resizing-detail {
+  cursor: ns-resize;
+  user-select: none;
 }
 #toggleDetail {
   border: 0;

@@ -11,5 +11,6 @@ shared/plotly.min.js
 shared/report.html
 shared/report.css
 shared/report.js
+shared/perfetto.js
 shared/model.js
 shared/stacks.js

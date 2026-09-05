@@ -13,6 +13,22 @@ class SharedFaultReportTest {
     lateinit var temporaryDirectory: Path
 
     @Test
+    fun `trace references stay relative to the report and distinguish capture directories`() {
+        val builder = AndroidFaultReport(temporaryDirectory)
+        val output = temporaryDirectory.resolve("comparison/report.html")
+        val first = Files.createDirectories(temporaryDirectory.resolve("run #1"))
+        val second = Files.createDirectories(temporaryDirectory.resolve("run #2"))
+        Files.write(first.resolve("faults.pftrace"), byteArrayOf(1))
+        Files.write(second.resolve("faults.pftrace"), byteArrayOf(2))
+        assertEquals("../run%20%231/faults.pftrace", builder.perfettoTraceReference(first, output))
+        assertEquals("../run%20%232/faults.pftrace", builder.perfettoTraceReference(second, output))
+        assertEquals("faults.pftrace", builder.perfettoTraceReference(first, first.resolve("report.html")))
+        assertEquals(null, builder.perfettoTraceReference(temporaryDirectory.resolve("missing"), output))
+        Files.write(second.resolve("faults.pftrace"), byteArrayOf())
+        assertEquals(null, builder.perfettoTraceReference(second, output))
+    }
+
+    @Test
     fun `stack dictionaries preserve every event and full frame identity`() {
         val frame = mapOf("label" to "read", "file" to "/app/a", "kind" to "user")
         val other = frame + ("file" to "/app/b")

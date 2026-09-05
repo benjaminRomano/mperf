@@ -11,6 +11,11 @@ for (const run of REPORT.runs) {
   delete run.frames;
 }
 const $ = (id) => document.getElementById(id);
+const perfetto = FaultPerfetto.create({
+  button: $("openPerfetto"),
+  download: $("downloadTrace"),
+  status: $("perfettoStatus"),
+});
 const escapeHtml = (value) =>
   String(value ?? "").replace(
     /[&<>"']/g,
@@ -126,6 +131,7 @@ function setTab(tab) {
 }
 function changeRun() {
   run = REPORT.runs[Number($("run").value)];
+  perfetto.setRun(run);
   range = null;
   clearDetail();
   run.events.forEach((e, i) => (e.order = i + 1));
@@ -635,9 +641,40 @@ $("sites").addEventListener("click", (ev) => {
   if (!button) return;
   selectFault(events.find((e) => String(e.id) === button.dataset.fault));
 });
+let detailHeightFraction = 0.34;
+let detailDrag = null;
+function syncDetailHeight(requested) {
+  const panel = document.querySelector(".analysis-panel");
+  const available =
+    panel.clientHeight -
+    panel.querySelector(".tabs").offsetHeight -
+    $("selectedSource").offsetHeight;
+  const size = FaultModel.detailSize(
+    available,
+    requested ?? panel.clientHeight * detailHeightFraction,
+  );
+  if (requested !== undefined && panel.clientHeight > 0)
+    detailHeightFraction = size.height / panel.clientHeight;
+  $("detailDock").style.setProperty("--detail-height", size.height + "px");
+  const handle = $("resizeDetail");
+  handle.setAttribute("aria-valuemin", size.min);
+  handle.setAttribute("aria-valuemax", size.max);
+  handle.setAttribute("aria-valuenow", size.height);
+  handle.setAttribute("aria-valuetext", size.height + " pixels high");
+  return size;
+}
+function stopDetailDrag(ev) {
+  if (ev && detailDrag && ev.pointerId !== detailDrag.pointerId) return;
+  detailDrag = null;
+  $("resizeDetail").classList.remove("dragging");
+  document.body.classList.remove("resizing-detail");
+}
 function setDetailOpen(open) {
+  if (!open) stopDetailDrag();
   $("detailDock").classList.toggle("open", open);
   $("detail").hidden = !open;
+  $("resizeDetail").hidden = !open;
+  if (open) syncDetailHeight();
   $("toggleDetail").setAttribute("aria-expanded", String(open));
   $("detailCaption").textContent =
     (selected ? " · #" + fmt(selected.order) : "") +
@@ -646,6 +683,37 @@ function setDetailOpen(open) {
 $("toggleDetail").addEventListener("click", () =>
   setDetailOpen($("detail").hidden),
 );
+$("resizeDetail").addEventListener("pointerdown", (ev) => {
+  if (ev.button !== 0 || !ev.isPrimary) return;
+  ev.preventDefault();
+  ev.currentTarget.focus();
+  detailDrag = {
+    pointerId: ev.pointerId,
+    y: ev.clientY,
+    height: $("detailDock").offsetHeight,
+  };
+  ev.currentTarget.setPointerCapture(ev.pointerId);
+  ev.currentTarget.classList.add("dragging");
+  document.body.classList.add("resizing-detail");
+});
+$("resizeDetail").addEventListener("pointermove", (ev) => {
+  if (detailDrag?.pointerId === ev.pointerId)
+    syncDetailHeight(detailDrag.height + detailDrag.y - ev.clientY);
+});
+for (const type of ["pointerup", "pointercancel", "lostpointercapture"])
+  $("resizeDetail").addEventListener(type, stopDetailDrag);
+$("resizeDetail").addEventListener("keydown", (ev) => {
+  const size = syncDetailHeight();
+  const heights = {
+    ArrowUp: size.height + 24,
+    ArrowDown: size.height - 24,
+    Home: size.min,
+    End: size.max,
+  };
+  if (!(ev.key in heights)) return;
+  ev.preventDefault();
+  syncDetailHeight(heights[ev.key]);
+});
 $("sources").addEventListener("click", (ev) => {
   const button = ev.target.closest("[data-source]");
   if (!button) return;
@@ -716,4 +784,7 @@ new ResizeObserver(() => {
 new ResizeObserver(() => {
   if (activeTab === "stacks" || activeTab === "flame") drawStacks();
 }).observe($("stackScroll"));
+new ResizeObserver(() => {
+  if (!$("detail").hidden) syncDetailHeight();
+}).observe(document.querySelector(".analysis-panel"));
 changeRun();

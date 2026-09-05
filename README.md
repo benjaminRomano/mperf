@@ -233,6 +233,13 @@ APK/DEX and VDEX/ODEX attribution, major/minor evidence, comparison views, and o
 and section attribution uses UUID-verified Mach-O images (for example, `__TEXT` and `__DATA`), not the caller binary.
 Android retains timestamped native mappings and optional identity-verified DWARF enrichment. See the
 [`faults` CLI reference](docs/cli.md#faults) or run either platform command with `--help` for the full option set.
+The Android report's **Open in Perfetto** button opens the selected run's `faults.pftrace`, including startup
+context collected in that session. Keep the capture directories alongside comparison reports and serve them
+over HTTP for one-click loading. Trace bytes pass directly between browser windows, without uploading them;
+local `file://` reports offer manual opening instead. The HTML itself remains usable without the trace file.
+Drag the divider above **Selected fault** to resize its callstack panel. When the divider is focused,
+Arrow Up/Down resize it; Home/End select the minimum/maximum height. Collapsing preserves the chosen height.
+
 Android captures default to `--compilation speed-profile`: verify the actual ART filter for each code-bearing
 installed APK, using the target instruction set. If necessary, request profile-guided compilation; command
 `Success` alone is not accepted. If no usable device profile produces `speed-profile`, mperf inspects/extracts

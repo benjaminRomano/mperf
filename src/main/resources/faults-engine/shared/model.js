@@ -57,5 +57,15 @@ globalThis.FaultModel = (() => {
   function matchesRegion(event, value) {
     return !value || regions(event).some((region) => region.value === value);
   }
-  return { page, deltas, median, regions, matchesRegion };
+  function detailSize(available, requested) {
+    const space = Math.max(0, available);
+    const max = Math.floor(space - Math.min(120, space * 0.4));
+    const min = Math.min(90, max);
+    return {
+      min,
+      max,
+      height: Math.round(Math.max(min, Math.min(max, requested))),
+    };
+  }
+  return { page, deltas, median, regions, matchesRegion, detailSize };
 })();

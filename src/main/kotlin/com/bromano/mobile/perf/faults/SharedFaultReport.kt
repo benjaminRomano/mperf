@@ -31,12 +31,13 @@ internal class SharedFaultReport(
                 "STYLE" to Files.readString(assets.resolve("report.css")),
                 "MODEL" to Files.readString(assets.resolve("model.js")),
                 "STACKS" to Files.readString(assets.resolve("stacks.js")),
+                "PERFETTO" to Files.readString(assets.resolve("perfetto.js")),
                 "SCRIPT" to Files.readString(assets.resolve("report.js")),
                 "PLOTLY" to Files.readString(assets.resolve("plotly.min.js")),
                 "DATA" to payload,
             )
         val document =
-            Regex("__(TITLE|STYLE|PLOTLY|DATA|SCRIPT|MODEL|STACKS)__")
+            Regex("__(TITLE|STYLE|PLOTLY|DATA|SCRIPT|MODEL|STACKS|PERFETTO)__")
                 .replace(Files.readString(assets.resolve("report.html"))) { replacements.getValue(it.groupValues[1]) }
         output.toAbsolutePath().parent?.let(Files::createDirectories)
         Files.writeString(output, document)

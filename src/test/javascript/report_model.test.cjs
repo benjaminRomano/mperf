@@ -17,6 +17,19 @@ const event = (id, address, source = "a", page = 0) => ({
   source,
   page,
 });
+test("detail dock clamps dragging while reserving space for the main view", () => {
+  assert.deepEqual(FaultModel.detailSize(800, 300), {
+    min: 90, max: 680, height: 300,
+  });
+  assert.equal(FaultModel.detailSize(800, -100).height, 90);
+  assert.equal(FaultModel.detailSize(800, 1200).height, 680);
+});
+test("detail dock remains bounded in short or hidden viewports", () => {
+  assert.deepEqual(FaultModel.detailSize(100, 300), {
+    min: 60, max: 60, height: 60,
+  });
+  assert.deepEqual(FaultModel.detailSize(-10, 300), { min: 0, max: 0, height: 0 });
+});
 test("unplottable addresses retain records without bridging adjacent deltas", () => {
   const events = [
     event(1, "0x1000"),

@@ -1,5 +1,6 @@
 package com.bromano.mobile.perf.faults
 
+import java.net.URI
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.name
@@ -71,10 +72,10 @@ internal class AndroidFaultReport(
         comparisonLabel: String = "Comparison",
         allowIncomparable: Boolean = false,
     ) {
-        val first = reportRun(capture, label)
+        val first = reportRun(capture, label).apply { put("perfettoTrace", perfettoTraceReference(capture, output)) }
         val runs = mutableListOf(first)
         comparison?.let { other ->
-            val second = reportRun(other, comparisonLabel)
+            val second = reportRun(other, comparisonLabel).apply { put("perfettoTrace", perfettoTraceReference(other, output)) }
             val a = first.getValue("provenance") as Map<*, *>
             val b = second.getValue("provenance") as Map<*, *>
             require(a["package"] == b["package"] && a["page_size"] == b["page_size"]) {
@@ -114,7 +115,9 @@ internal class AndroidFaultReport(
 
             @Suppress("UNCHECKED_CAST")
             val notes = runs[index].getValue("notes") as MutableList<String>
-            AndroidDwarf.reportRun(path, metadata, notes)?.let { runs.add(it.toMutableMap()) }
+            AndroidDwarf.reportRun(path, metadata, notes)?.let {
+                runs.add(it.toMutableMap().apply { put("perfettoTrace", perfettoTraceReference(path, output)) })
+            }
         }
         SharedFaultReport(engineRoot).write(runs, output, (first["provenance"] as Map<*, *>)["package"].toString() + " · startup faults")
     }
@@ -302,6 +305,22 @@ internal class AndroidFaultReport(
     }
 
     private fun Any?.orEmptyString(): String = this?.toString().orEmpty()
+
+    internal fun perfettoTraceReference(
+        capture: Path,
+        output: Path,
+    ): String? {
+        val trace = capture.resolve("faults.pftrace").toAbsolutePath().normalize()
+        if (!Files.isRegularFile(trace) || Files.size(trace) == 0L) return null
+        val relative =
+            output
+                .toAbsolutePath()
+                .normalize()
+                .parent
+                .relativize(trace)
+                .joinToString("/")
+        return URI(null, null, relative, null).toASCIIString()
+    }
 
     internal fun storedDexBoundaries(
         archive: Path,

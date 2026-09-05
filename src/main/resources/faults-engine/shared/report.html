@@ -14,6 +14,7 @@
       <h1>__TITLE__</h1>
       <p id="summary"></p>
       <p id="cacheStatus"></p>
+      <p id="perfettoStatus" role="status" hidden></p>
     </header>
     <div class="toolbar">
       <label
@@ -44,6 +45,8 @@
           placeholder="File, DEX, class, or stack frame"
       /></label>
       <button id="reset">Reset filters</button>
+      <button id="openPerfetto" title="Open this run's startup trace in Perfetto; trace data stays in your browser">Open in Perfetto</button>
+      <a id="downloadTrace" download hidden>Trace file</a>
     </div>
     <div class="selection-bar">
       <span id="selectionCount" aria-live="polite"></span
@@ -196,6 +199,16 @@
           </div>
         </section>
         <section class="event-detail" id="detailDock">
+          <div
+            id="resizeDetail"
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Resize selected fault details"
+            aria-controls="detail"
+            tabindex="0"
+            title="Drag to resize. Arrow keys adjust height."
+            hidden
+          ></div>
           <button
             id="toggleDetail"
             aria-expanded="false"
@@ -225,6 +238,9 @@
     </script>
     <script>
       __STACKS__;
+    </script>
+    <script>
+      __PERFETTO__;
     </script>
     <script>
       __SCRIPT__;

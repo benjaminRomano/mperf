@@ -156,7 +156,13 @@ tasks {
     register<Exec>("testFaultViewer") {
         group = "verification"
         description = "Run shared fault viewer model and navigation regression tests"
-        commandLine("node", "--test", "src/test/javascript/report_model.test.cjs", "src/test/javascript/report_stacks.test.cjs")
+        commandLine(
+            "node",
+            "--test",
+            "src/test/javascript/report_model.test.cjs",
+            "src/test/javascript/report_stacks.test.cjs",
+            "src/test/javascript/report_perfetto.test.cjs",
+        )
     }
 
     check { dependsOn("testFaultViewer", verifyFaultResources) }
