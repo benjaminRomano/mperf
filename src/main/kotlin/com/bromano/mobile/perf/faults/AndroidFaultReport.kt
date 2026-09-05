@@ -4,6 +4,21 @@ import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.name
 
+internal fun compilationStatuses(
+    output: String,
+    exitCode: Int,
+): List<String> =
+    if (exitCode == 0) {
+        Regex("\\[status=([^]\\s]+)]")
+            .findAll(output)
+            .map { it.groupValues[1] }
+            .distinct()
+            .sorted()
+            .toList()
+    } else {
+        emptyList()
+    }
+
 internal fun stableAndroidSourceLabel(
     path: String,
     packageName: String,
@@ -69,7 +84,6 @@ internal class AndroidFaultReport(
             }
             runs.add(second)
         }
-        val exactCount = runs.size
         for ((index, path) in listOfNotNull(capture, comparison).withIndex()) {
             @Suppress("UNCHECKED_CAST")
             val metadata = runs[index].getValue("provenance") as Map<String, Any?>
@@ -78,7 +92,6 @@ internal class AndroidFaultReport(
             val notes = runs[index].getValue("notes") as MutableList<String>
             AndroidDwarf.reportRun(path, metadata, notes)?.let { runs.add(it.toMutableMap()) }
         }
-        check(exactCount >= 1)
         SharedFaultReport(engineRoot).write(runs, output, (first["provenance"] as Map<*, *>)["package"].toString() + " · startup faults")
     }
 
@@ -215,6 +228,14 @@ internal class AndroidFaultReport(
             )
         notes += (metadata["warnings"] as? List<*>)?.map { it.toString() }.orEmpty()
         notes += dwarf.warnings
+        val compilationBefore = (metadata["compilation_before"] as? Map<*, *>)?.get("statuses") as? List<*>
+        val compilationAfter = (metadata["compilation_after"] as? Map<*, *>)?.get("statuses") as? List<*>
+        if (!compilationBefore.isNullOrEmpty()) {
+            notes +=
+                "ART status before capture: ${compilationBefore.joinToString()}; after: ${compilationAfter?.joinToString()?.ifBlank {
+                    null
+                } ?: "unknown"}. Raw per-file state is saved with the capture."
+        }
         if (dwarf.coverage.isNotEmpty()) {
             metadata["report_dwarf_enrichment"] = dwarf.coverage
             notes +=

@@ -56,12 +56,4 @@ class SharedFaultReportTest {
         assertTrue(html.contains("height: 100dvh"))
         assertTrue(html.contains("Callers at top; faulting frames below"))
     }
-
-    @Test
-    fun `bundled fault runtime contains no Python engines`() {
-        val engine = BundledFaultEngine(temporaryDirectory).materialize()
-        Files.walk(engine).use { paths ->
-            assertFalse(paths.anyMatch { it.fileName.toString().endsWith(".py") })
-        }
-    }
 }

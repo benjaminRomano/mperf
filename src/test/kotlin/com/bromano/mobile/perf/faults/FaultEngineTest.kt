@@ -28,8 +28,7 @@ class FaultEngineTest {
         assertTrue(first.resolve("shared/stacks.js").exists())
         assertTrue(first.resolve("ios/native/residency.c").exists())
         assertTrue(first.resolve("ios/cache-pressure/CachePressure.xcodeproj/project.pbxproj").exists())
-        assertTrue(first.resolve("ios/ios_fault_visualizer/assets/plotly.min.js").exists())
-        assertTrue(Files.size(first.resolve("ios/ios_fault_visualizer/assets/plotly.min.js")) > 4_000_000)
+        assertTrue(Files.size(first.resolve("shared/plotly.min.js")) > 4_000_000)
         assertTrue(Files.readString(first.resolve(".complete")).trim().matches(Regex("[0-9a-f]{64}")))
     }
 
@@ -65,7 +64,7 @@ class FaultEngineTest {
             assertEquals(1, results.distinct().size)
             results.forEach { result ->
                 assertTrue(result.resolve(".complete").exists())
-                assertTrue(Files.size(result.resolve("ios/ios_fault_visualizer/assets/plotly.min.js")) > 4_000_000)
+                assertTrue(Files.size(result.resolve("shared/plotly.min.js")) > 4_000_000)
             }
         } finally {
             executor.shutdownNow()

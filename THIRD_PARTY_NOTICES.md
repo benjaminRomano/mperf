@@ -5,7 +5,7 @@ processing work without fetching scripts at report-view time.
 
 ## Plotly.js
 
-`src/main/resources/faults-engine/ios/ios_fault_visualizer/assets/plotly.min.js`
+`src/main/resources/faults-engine/shared/plotly.min.js`
 
 Copyright 2012–2026 Plotly, Inc.
 

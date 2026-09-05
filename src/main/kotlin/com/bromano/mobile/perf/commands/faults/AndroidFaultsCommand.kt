@@ -21,7 +21,7 @@ class AndroidFaultsCommand(
 ) : CliktCommand("android") {
     override fun help(context: Context) = "Collect exact Android startup faults and generate an interactive HTML report"
 
-    private val workflow = workflow ?: DefaultAndroidFaultWorkflow(shell, engine)
+    private val workflow = workflow ?: DefaultAndroidFaultWorkflow(engine)
 
     private val packageName by option("-p", "--package", help = "Package name")
     private val activity by option("--activity", help = "Launch activity; resolved automatically when omitted")

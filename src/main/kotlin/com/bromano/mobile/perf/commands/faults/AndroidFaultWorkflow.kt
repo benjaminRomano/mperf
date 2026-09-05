@@ -4,7 +4,6 @@ import com.bromano.mobile.perf.faults.AndroidFaultCollector
 import com.bromano.mobile.perf.faults.AndroidFaultProcessor
 import com.bromano.mobile.perf.faults.AndroidFaultReport
 import com.bromano.mobile.perf.faults.FaultEngine
-import com.bromano.mobile.perf.utils.Shell
 import java.nio.file.Path
 
 data class AndroidFaultRequest(
@@ -32,7 +31,6 @@ fun interface AndroidFaultWorkflow {
 }
 
 internal class DefaultAndroidFaultWorkflow(
-    @Suppress("UNUSED_PARAMETER") shell: Shell,
     private val engine: FaultEngine,
 ) : AndroidFaultWorkflow {
     override fun run(request: AndroidFaultRequest): Path {

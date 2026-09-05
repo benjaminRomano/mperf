@@ -914,11 +914,4 @@ internal class IosFaultCollector(
     private fun deleteTree(path: Path) {
         Files.walk(path).use { paths -> paths.sorted(Comparator.reverseOrder()).forEach(Files::delete) }
     }
-
-    @Suppress("unused")
-    private fun sha256(path: Path): String =
-        MessageDigest
-            .getInstance("SHA-256")
-            .digest(Files.readAllBytes(path))
-            .joinToString("") { "%02x".format(it) }
 }

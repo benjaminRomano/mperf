@@ -28,7 +28,8 @@ platform profilers and supports collection over both ad-hoc app sessions and sin
 
 - Java 21+
 - Android SDK Platform‑Tools (`adb` on PATH)
-- Python 3.13+, [`uv`](https://docs.astral.sh/uv/), `tar`, and `gzip` on PATH
+- `tar` and `gzip` for installation
+- Python 3 for the installer helper, Simpleperf Firefox conversion, and optional trace server; not needed by `faults`
 - Full Xcode installation with an active developer directory (for `xctrace`, Instruments, and Simulator)
 - macOS or Linux
 
@@ -232,6 +233,9 @@ APK/DEX and VDEX/ODEX attribution, major/minor evidence, comparison views, and o
 and section attribution uses UUID-verified Mach-O images (for example, `__TEXT` and `__DATA`), not the caller binary.
 Android retains timestamped native mappings and optional identity-verified DWARF enrichment. See the
 [`faults` CLI reference](docs/cli.md#faults) or run either platform command with `--help` for the full option set.
+Android captures also save read-only ART compilation dumps before cache eviction and after recording. See the
+[ChatGPT reset-versus-AOT comparison](docs/chatgpt-compilation-comparison.md) for verified `verify`/`speed` states,
+compiled-code section evidence, and instructions for exploring both page-fault patterns.
 
 ### Perfetto (Default)
 

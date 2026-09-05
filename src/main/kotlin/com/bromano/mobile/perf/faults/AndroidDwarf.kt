@@ -1,10 +1,10 @@
 package com.bromano.mobile.perf.faults
 
+import com.bromano.mobile.perf.utils.sha256
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.file.Files
 import java.nio.file.Path
-import java.security.MessageDigest
 import java.time.Duration
 
 internal object AndroidDwarf {
@@ -134,7 +134,7 @@ internal object AndroidDwarf {
                     "serial" to capture["serial"],
                     "artifacts_sha256" to
                         listOf("simpleperf.data", "simpleperf-stacks.txt").associateWith {
-                            hash(Files.readAllBytes(output.resolve(it)))
+                            sha256(output.resolve(it))
                         },
                 )
             Json.write(output.resolve("simpleperf-metadata.json"), metadata)
@@ -161,8 +161,8 @@ internal object AndroidDwarf {
                         frame = mutableMapOf("ip" to value)
                         frames.add(requireNotNull(frame))
                     }
-                    key in listOf("file", "symbol") && frame != null -> frame!![if (key == "symbol") "label" else "file"] = value
-                    key in listOf("event_type", "time", "event_count", "thread_id", "thread_name") -> sample!![key] = value
+                    key in listOf("file", "symbol") && frame != null -> frame[if (key == "symbol") "label" else "file"] = value
+                    key in listOf("event_type", "time", "event_count", "thread_id", "thread_name") -> sample[key] = value
                 }
             }
         }
@@ -318,7 +318,7 @@ internal object AndroidDwarf {
         val files =
             listOf("simpleperf.data", "simpleperf-stacks.txt").associateWith {
                 Files.readAllBytes(path.resolve(it)).also { bytes ->
-                    require(hash(bytes) == hashes[it]) { "Artifact hash mismatch: $it" }
+                    require(sha256(bytes) == hashes[it]) { "Artifact hash mismatch: $it" }
                 }
             }
         val raw = readIdentities(files.getValue("simpleperf.data"))
@@ -499,6 +499,4 @@ internal object AndroidDwarf {
     private fun number(value: Any?): Long = (value as? Number)?.toLong() ?: error("Missing numeric capture metadata")
 
     private fun unsigned(value: String): ULong = if (value.startsWith("0x")) value.substring(2).toULong(16) else value.toULong()
-
-    private fun hash(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
 }

@@ -395,72 +395,78 @@ internal object AndroidBinary {
         output: Path,
         artifacts: Map<String, Path>,
         preferredExecutable: Path?,
-    ) {
+    ): List<String> {
+        val warnings = mutableListOf<String>()
         val executable = findSymbolizer(preferredExecutable)
         val path = output.resolve("resolved_fault_callchains.csv")
-        if (executable == null || !Files.isExecutable(executable) || !Files.exists(path)) return
+        if (executable == null || !Files.isExecutable(executable) || !Files.exists(path)) return warnings
         val rows = Csv.read(path).map { it.toMutableMap() }
         rows
             .filter { it["frame_kind"] == "user" && it["file_name"] in artifacts && it["file_offset"].orEmpty().isNotBlank() }
             .groupBy { it.getValue("file_name") }
             .forEach { (remote, frames) ->
-                val local = artifacts.getValue(remote)
-                val segments = elf(Files.readAllBytes(local)).segments
-                val addresses = linkedMapOf<Long, Long>()
-                frames.forEach { row ->
-                    val offset = row.getValue("file_offset").toLong()
-                    segments.find { offset in it.start until it.end }?.let { addresses[offset] = it.address + offset - it.start }
-                }
-                if (addresses.isEmpty()) return@forEach
-                val process =
-                    ProcessBuilder(
-                        executable.toString(),
-                        "--obj",
-                        local.toString(),
-                        "--output-style=JSON",
-                        "--no-inlines",
-                        "--demangle",
-                    ).start()
-                var stdout = ""
-                var stderr = ""
-                val reader = thread(isDaemon = true) { stdout = process.inputStream.bufferedReader().readText() }
-                val errors = thread(isDaemon = true) { stderr = process.errorStream.bufferedReader().readText() }
                 try {
-                    process.outputStream.bufferedWriter().use { writer ->
-                        addresses.values.forEach { writer.write("0x${it.toString(16)}\n") }
+                    val local = artifacts.getValue(remote)
+                    val segments = elf(Files.readAllBytes(local)).segments
+                    val addresses = linkedMapOf<Long, Long>()
+                    frames.forEach { row ->
+                        val offset = row.getValue("file_offset").toLong()
+                        segments.find { offset in it.start until it.end }?.let { addresses[offset] = it.address + offset - it.start }
                     }
-                    check(process.waitFor(60, TimeUnit.SECONDS)) { "Symbolizer timed out" }
-                    reader.join(5_000)
-                    errors.join(5_000)
-                    check(process.exitValue() == 0) { "Symbolizer failed: $stderr" }
-                    val values =
-                        stdout
-                            .lineSequence()
-                            .filter(String::isNotBlank)
-                            .map { Json.mapper.readTree(it) }
-                            .toList()
-                    require(values.size == addresses.size) { "Symbolizer output count differs from submitted addresses" }
-                    val labels =
-                        addresses.keys
-                            .zip(values)
-                            .mapNotNull { (offset, value) ->
-                                value
-                                    .path(
-                                        "Symbol",
-                                    ).firstOrNull()
-                                    ?.path("FunctionName")
-                                    ?.asText()
-                                    ?.takeUnless { it.isBlank() || it == "??" }
-                                    ?.let {
-                                        offset to
-                                            it
-                                    }
-                            }.toMap()
-                    frames.forEach { row -> labels[row.getValue("file_offset").toLong()]?.let { row["label"] = it } }
-                } finally {
-                    if (process.isAlive) process.destroyForcibly()
+                    if (addresses.isEmpty()) return@forEach
+                    val process =
+                        ProcessBuilder(
+                            executable.toString(),
+                            "--obj",
+                            local.toString(),
+                            "--output-style=JSON",
+                            "--no-inlines",
+                            "--demangle",
+                        ).start()
+                    var stdout = ""
+                    var stderr = ""
+                    val reader = thread(isDaemon = true) { stdout = process.inputStream.bufferedReader().readText() }
+                    val errors = thread(isDaemon = true) { stderr = process.errorStream.bufferedReader().readText() }
+                    try {
+                        process.outputStream.bufferedWriter().use { writer ->
+                            addresses.values.forEach { writer.write("0x${it.toString(16)}\n") }
+                        }
+                        check(process.waitFor(60, TimeUnit.SECONDS)) { "Symbolizer timed out" }
+                        reader.join(5_000)
+                        errors.join(5_000)
+                        check(process.exitValue() == 0) { "Symbolizer failed: $stderr" }
+                        val values =
+                            stdout
+                                .lineSequence()
+                                .filter(String::isNotBlank)
+                                .map { Json.mapper.readTree(it) }
+                                .toList()
+                        require(values.size == addresses.size) { "Symbolizer output count differs from submitted addresses" }
+                        val labels =
+                            addresses.keys
+                                .zip(values)
+                                .mapNotNull { (offset, value) ->
+                                    value
+                                        .path(
+                                            "Symbol",
+                                        ).firstOrNull()
+                                        ?.path("FunctionName")
+                                        ?.asText()
+                                        ?.takeUnless { it.isBlank() || it == "??" }
+                                        ?.let {
+                                            offset to
+                                                it
+                                        }
+                                }.toMap()
+                        frames.forEach { row -> labels[row.getValue("file_offset").toLong()]?.let { row["label"] = it } }
+                    } finally {
+                        if (process.isAlive) process.destroyForcibly()
+                    }
+                } catch (error: Exception) {
+                    warnings += "Native symbols unavailable for $remote; retaining file/offset frames: ${error.message}"
                 }
             }
         if (rows.isNotEmpty()) Csv.write(path, rows.first().keys.toList(), rows)
+        return warnings
     }
 }

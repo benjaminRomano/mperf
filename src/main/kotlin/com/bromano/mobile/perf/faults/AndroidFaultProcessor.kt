@@ -140,7 +140,8 @@ internal class AndroidFaultProcessor {
         writeFileSizes(output, inodes.sizes, sectionEntries)
         val fileBacked = allFaults.filter { it["mapping_kind"] == "file" }
         AndroidBinary.enrich(output, artifacts, pageSize)
-        AndroidBinary.symbolize(output, artifacts, metadata["llvm_symbolizer"]?.toString()?.let(Path::of))
+        metadata["warnings"] = (metadata["warnings"] as? List<*>).orEmpty() +
+            AndroidBinary.symbolize(output, artifacts, metadata["llvm_symbolizer"]?.toString()?.let(Path::of))
         metadata["callchain_results"] = callchainResults
         metadata["faults"] =
             mapOf(

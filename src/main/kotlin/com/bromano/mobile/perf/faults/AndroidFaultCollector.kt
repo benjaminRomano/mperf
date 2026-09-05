@@ -1,9 +1,9 @@
 package com.bromano.mobile.perf.faults
 
 import com.bromano.mobile.perf.commands.faults.AndroidFaultRequest
+import com.bromano.mobile.perf.utils.sha256
 import java.nio.file.Files
 import java.nio.file.Path
-import java.security.MessageDigest
 import java.time.Duration
 import kotlin.io.path.isDirectory
 import kotlin.io.path.name
@@ -78,6 +78,7 @@ internal class AndroidFaultCollector(
 
         adb.shell("am force-stop ${quote(packageName)}")
         waitStopped(adb, packageName)
+        recordCompilation(adb, sdk, packageName, request.output, metadata, "before")
         var targets = adb.packageFiles(packageName, apkPaths)
         dumpInodes(adb, packageName, apkPaths, request.output, append = false)
         val residency = mutableListOf<Map<String, Any?>>()
@@ -178,7 +179,7 @@ internal class AndroidFaultCollector(
             var cleanupFailure: Throwable? = null
             collector?.let { running ->
                 try {
-                    val terminal = stopCollector(adb, running)
+                    val terminal = stopCollector(running)
                     terminal.forEach { (key, value) -> metadata["collector_$key"] = value }
                     metadata["collector_return_code"] = running.recorder.process.exitValue()
                     metadata["collector_loss_detection"] =
@@ -190,7 +191,7 @@ internal class AndroidFaultCollector(
             }
             perfetto?.let { running ->
                 try {
-                    stopPerfetto(adb, running)
+                    stopPerfetto(running)
                 } catch (error: Throwable) {
                     metadata["perfetto_stop_error"] = error.message
                     cleanupFailure?.addSuppressed(error) ?: run { cleanupFailure = error }
@@ -220,6 +221,7 @@ internal class AndroidFaultCollector(
         )
         if (request.pullArtifacts) pullArtifacts(adb, apkPaths, abi, request.output)
         if (request.nativeStacks || request.dwarfStacks) pullStackBinaries(adb, request.output, warnings(metadata))
+        recordCompilation(adb, sdk, packageName, request.output, metadata, "after")
 
         val integrity =
             listOf("lost", "integrity_errors", "throttled", "callchain_overflow")
@@ -231,6 +233,35 @@ internal class AndroidFaultCollector(
         }
         metadata["capture_status"] = "collected"
         Json.write(request.output.resolve("capture_metadata.json"), metadata)
+    }
+
+    private fun recordCompilation(
+        adb: Device,
+        sdk: Int,
+        packageName: String,
+        output: Path,
+        metadata: MutableMap<String, Any?>,
+        phase: String,
+    ) {
+        // Read before eviction or after recording, never inside the cache-cold launch interval.
+        val command = if (sdk >= 34) "pm art dump" else "dumpsys package"
+        try {
+            val result = adb.shell("$command ${quote(packageName)}", check = false)
+            val file = output.resolve("compilation-$phase.txt")
+            Files.writeString(file, result.stdout + result.stderr)
+            metadata["compilation_$phase"] =
+                mapOf(
+                    "command" to command,
+                    "exit_code" to result.exitCode,
+                    "file" to file.fileName.toString(),
+                    "sha256" to sha256(file),
+                    "statuses" to compilationStatuses(result.stdout, result.exitCode),
+                )
+            if (result.exitCode != 0) warnings(metadata) += "Compilation state ($phase) unavailable: exit ${result.exitCode}"
+        } catch (error: Exception) {
+            warnings(metadata) += "Compilation state ($phase) unavailable: ${error.message}"
+        }
+        Json.write(output.resolve("capture_metadata.json"), metadata)
     }
 
     private data class Running(
@@ -283,10 +314,7 @@ internal class AndroidFaultCollector(
         }
     }
 
-    private fun stopPerfetto(
-        @Suppress("UNUSED_PARAMETER") adb: Device,
-        running: Running,
-    ) {
+    private fun stopPerfetto(running: Running) {
         val output = running.recorder.stop()
         require(running.recorder.process.exitValue() in setOf(0, 130)) { "Perfetto failed: $output" }
     }
@@ -310,10 +338,7 @@ internal class AndroidFaultCollector(
         }
     }
 
-    private fun stopCollector(
-        @Suppress("UNUSED_PARAMETER") adb: Device,
-        running: CollectorRunning,
-    ): Map<String, Long> = parseCollectorSummary(running.recorder.stop())
+    private fun stopCollector(running: CollectorRunning): Map<String, Long> = parseCollectorSummary(running.recorder.stop())
 
     internal fun parseCollectorSummary(output: String): Map<String, Long> {
         val line =
@@ -702,10 +727,6 @@ internal class AndroidFaultCollector(
 
     @Suppress("UNCHECKED_CAST")
     private fun warnings(metadata: MutableMap<String, Any?>): MutableList<String> = metadata.getValue("warnings") as MutableList<String>
-
-    private fun sha256(path: Path): String = sha256(Files.readAllBytes(path))
-
-    private fun sha256(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
 
     private fun quote(value: String): String = "'${value.replace("'", "'\"'\"'")}'"
 

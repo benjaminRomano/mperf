@@ -32,7 +32,7 @@ internal class SharedFaultReport(
                 "MODEL" to Files.readString(assets.resolve("model.js")),
                 "STACKS" to Files.readString(assets.resolve("stacks.js")),
                 "SCRIPT" to Files.readString(assets.resolve("report.js")),
-                "PLOTLY" to Files.readString(engineRoot.resolve("ios/ios_fault_visualizer/assets/plotly.min.js")),
+                "PLOTLY" to Files.readString(assets.resolve("plotly.min.js")),
                 "DATA" to payload,
             )
         val document =

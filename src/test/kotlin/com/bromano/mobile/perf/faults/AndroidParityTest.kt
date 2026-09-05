@@ -132,61 +132,6 @@ class AndroidParityTest {
         assertTrue(AndroidBinary.dexMethods(malformed).isEmpty())
     }
 
-    private fun vdex(legacy: Boolean = false): Path {
-        val data = ByteArray(280)
-        val b = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
-        if (legacy) {
-            "vdex021\u0000002\u0000".toByteArray().copyInto(data)
-            b.putInt(12, 2)
-            b.putInt(28, 0x1111)
-            b.putInt(32, 0x2222)
-            b.putInt(36, 232)
-            for (at in listOf(52, 168)) {
-                "dex\n035\u0000".toByteArray().copyInto(data, at)
-                b.putInt(at + 32, 112)
-            }
-        } else {
-            "vdex027\u0000".toByteArray().copyInto(data)
-            b.putInt(8, 3)
-            b.putInt(12, 0)
-            b.putInt(16, 48)
-            b.putInt(20, 8)
-            b.putInt(24, 1)
-            b.putInt(28, 56)
-            b.putInt(32, 224)
-            b.putInt(36, 2)
-            b.putInt(40, 280)
-            b.putInt(44, 0)
-            b.putInt(48, 0x1111)
-            b.putInt(52, 0x2222)
-            for (at in listOf(56, 168)) {
-                "dex\n035\u0000".toByteArray().copyInto(data, at)
-                b.putInt(at + 32, 112)
-            }
-        }
-        return directory.resolve("base.vdex").also { Files.write(it, data) }
-    }
-
-    @Test fun `modern and legacy VDEX boundaries require entire ordered checksum match`() {
-        for (legacy in listOf(false, true)) {
-            val path = vdex(legacy)
-            val verified = assertNotNull(Vdex.read(path, listOf("classes.dex" to 0x1111L, "classes2.dex" to 0x2222L)))
-            assertTrue(verified.identitiesVerified)
-            assertEquals(listOf("classes.dex", "classes2.dex"), verified.dexRanges.map { it.name })
-            val mismatch = assertNotNull(Vdex.read(path, listOf("classes.dex" to 0x1111L, "classes2.dex" to 0x3333L)))
-            assertFalse(mismatch.identitiesVerified)
-            assertTrue(mismatch.dexRanges.none { it.name.startsWith("classes") })
-        }
-    }
-
-    @Test fun `overlapping modern VDEX sections are rejected`() {
-        val path = vdex()
-        val bytes = Files.readAllBytes(path)
-        ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).putInt(28, 48)
-        Files.write(path, bytes)
-        assertNull(Vdex.read(path, null))
-    }
-
     @Test fun `reboot readiness requires a different valid boot ID`() {
         val old = "12345678-1234-1234-1234-123456789abc"
         val new = "abcdef12-1234-1234-1234-123456789abc"

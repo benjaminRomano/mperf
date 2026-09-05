@@ -7,7 +7,7 @@ ios/cache-pressure/CachePressure.xcodeproj/xcshareddata/xcschemes/CachePressure.
 ios/cache-pressure/CachePressure/CachePressureApp.swift
 ios/cache-pressure/CachePressure/Info.plist
 ios/native/residency.c
-ios/ios_fault_visualizer/assets/plotly.min.js
+shared/plotly.min.js
 shared/report.html
 shared/report.css
 shared/report.js

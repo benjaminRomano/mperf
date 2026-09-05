@@ -31,15 +31,12 @@ class AndroidArtifactsTest {
     @Test
     fun `one mismatch suppresses every dex identity`() {
         val checksums = listOf(0x12345678L, 0x9abcdef0L)
-        val analysis =
-            parse(
-                sectionedVdex(checksums),
-                listOf("classes.dex" to checksums[0], "classes2.dex" to 7L),
-            )!!
-
-        assertFalse(analysis.identitiesVerified)
-        assertTrue(analysis.dexRanges.all { "identity unverified" in it.name })
-        assertTrue(analysis.dexRanges.none { it.name.startsWith("classes") })
+        for (bytes in listOf(android10Vdex(checksums), sectionedVdex(checksums))) {
+            val analysis = parse(bytes, listOf("classes.dex" to checksums[0], "classes2.dex" to 7L))!!
+            assertFalse(analysis.identitiesVerified)
+            assertTrue(analysis.dexRanges.all { "identity unverified" in it.name })
+            assertTrue(analysis.dexRanges.none { it.name.startsWith("classes") })
+        }
     }
 
     @Test
