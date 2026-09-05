@@ -10,6 +10,7 @@ import com.github.ajalt.clikt.parameters.options.default
 import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.validate
+import com.github.ajalt.clikt.parameters.types.choice
 import com.github.ajalt.clikt.parameters.types.int
 import com.github.ajalt.clikt.parameters.types.path
 
@@ -25,6 +26,10 @@ class AndroidFaultsCommand(
 
     private val packageName by option("-p", "--package", help = "Package name")
     private val activity by option("--activity", help = "Launch activity; resolved automatically when omitted")
+    private val compilation by option(
+        "--compilation",
+        help = "Prepare verified profile-guided AOT before eviction, or preserve compilation for explicit experiments",
+    ).choice("speed-profile", "as-is").default("speed-profile")
     private val device by option("-d", "--device", help = "ADB device serial")
     private val output by option("-o", "--out", help = "Capture output directory")
         .path(mustExist = false, canBeFile = false)
@@ -56,6 +61,10 @@ class AndroidFaultsCommand(
     ).flag(default = false)
     private val pullArtifacts by option("--pull-artifacts", help = "Pull APK and ART files for section attribution")
         .flag("--no-pull-artifacts", default = true)
+    private val ioEvidence by option(
+        "--io-evidence",
+        help = "Capture available block I/O and scheduler events; export separate startup context CSVs",
+    ).flag(default = false)
     private val skipCollect by option(
         "--skip-collect",
         help = "Reprocess and report an existing exact capture",
@@ -105,6 +114,8 @@ class AndroidFaultsCommand(
                     allowIncomparable = allowIncomparable,
                     dwarfStacks = dwarfStacks,
                     reclaimMappedApks = reclaimMappedApks,
+                    ioEvidence = ioEvidence,
+                    compilation = compilation,
                 ),
             )
         echo("Android fault report: $report")

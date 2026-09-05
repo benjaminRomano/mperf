@@ -76,9 +76,25 @@ internal class AndroidFaultCollector(
         captureWarnings = warnings(metadata)
         Json.write(request.output.resolve("capture_metadata.json"), metadata)
 
+        val baseTraceConfig = Files.readString(engineRoot.resolve("android/ftrace.config"))
+        val traceConfig = if (request.ioEvidence) AndroidIo.prepare(adb, request.output, metadata, baseTraceConfig) else baseTraceConfig
         adb.shell("am force-stop ${quote(packageName)}")
         waitStopped(adb, packageName)
-        recordCompilation(adb, sdk, packageName, request.output, metadata, "before")
+        val compilation =
+            AndroidCompilation(
+                sdk,
+                abi,
+                packageName,
+                request.output,
+                metadata,
+                shell = { command, timeout -> adb.shell(command, check = false, timeout = timeout) },
+                stop = {
+                    adb.shell("am force-stop ${quote(packageName)}")
+                    waitStopped(adb, packageName)
+                },
+            )
+        compilation.prepare(request.compilation, apkPaths)
+        compilation.validate("before", strict = true)
         var targets = adb.packageFiles(packageName, apkPaths)
         dumpInodes(adb, packageName, apkPaths, request.output, append = false)
         val residency = mutableListOf<Map<String, Any?>>()
@@ -114,7 +130,7 @@ internal class AndroidFaultCollector(
         var dwarf: AndroidDwarf.Running? = null
         var primaryFailure: Throwable? = null
         try {
-            perfetto = startPerfetto(adb, remoteTrace)
+            perfetto = startPerfetto(adb, remoteTrace, traceConfig)
             collector = startCollector(adb, request.nativeStacks)
             metadata["collector_start_ns"] = collector.startNs
             metadata["collector_online_cpus"] = collector.onlineCpus
@@ -219,9 +235,12 @@ internal class AndroidFaultCollector(
         adb.rootShell(
             "rm -f ${quote(remoteFaults)} ${quote(remoteMappings)} ${quote(remoteCallchains)} ${quote(remoteTrace)}",
         )
-        if (request.pullArtifacts) pullArtifacts(adb, apkPaths, abi, request.output)
+        if (request.pullArtifacts) {
+            pullArtifacts(adb, apkPaths, abi, request.output)
+            AndroidOat.collect(adb, request.output, warnings(metadata))
+        }
         if (request.nativeStacks || request.dwarfStacks) pullStackBinaries(adb, request.output, warnings(metadata))
-        recordCompilation(adb, sdk, packageName, request.output, metadata, "after")
+        compilation.validate("after", strict = false)
 
         val integrity =
             listOf("lost", "integrity_errors", "throttled", "callchain_overflow")
@@ -233,35 +252,6 @@ internal class AndroidFaultCollector(
         }
         metadata["capture_status"] = "collected"
         Json.write(request.output.resolve("capture_metadata.json"), metadata)
-    }
-
-    private fun recordCompilation(
-        adb: Device,
-        sdk: Int,
-        packageName: String,
-        output: Path,
-        metadata: MutableMap<String, Any?>,
-        phase: String,
-    ) {
-        // Read before eviction or after recording, never inside the cache-cold launch interval.
-        val command = if (sdk >= 34) "pm art dump" else "dumpsys package"
-        try {
-            val result = adb.shell("$command ${quote(packageName)}", check = false)
-            val file = output.resolve("compilation-$phase.txt")
-            Files.writeString(file, result.stdout + result.stderr)
-            metadata["compilation_$phase"] =
-                mapOf(
-                    "command" to command,
-                    "exit_code" to result.exitCode,
-                    "file" to file.fileName.toString(),
-                    "sha256" to sha256(file),
-                    "statuses" to compilationStatuses(result.stdout, result.exitCode),
-                )
-            if (result.exitCode != 0) warnings(metadata) += "Compilation state ($phase) unavailable: exit ${result.exitCode}"
-        } catch (error: Exception) {
-            warnings(metadata) += "Compilation state ($phase) unavailable: ${error.message}"
-        }
-        Json.write(output.resolve("capture_metadata.json"), metadata)
     }
 
     private data class Running(
@@ -277,13 +267,14 @@ internal class AndroidFaultCollector(
     private fun startPerfetto(
         adb: Device,
         remoteTrace: String,
+        traceConfig: String,
     ): Running {
         require(adb.pid("perfetto") == null) { "Another Perfetto command is already running" }
         val recorder =
             AndroidRecorder.start(
                 adb,
                 "perfetto --txt -c - -o ${quote(remoteTrace)}",
-                Files.readString(engineRoot.resolve("android/ftrace.config")),
+                traceConfig,
             )
         try {
             await(Duration.ofSeconds(10), "Perfetto readiness") {

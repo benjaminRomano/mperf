@@ -281,7 +281,9 @@ internal object AndroidBinary {
         output: Path,
         artifacts: Map<String, Path>,
         pageSize: Long,
-    ) {
+    ): List<String> {
+        val warnings = mutableListOf<String>()
+        val oat = AndroidOat.load(output, artifacts, warnings)
         val sections = mutableMapOf<String, List<Region>>()
         val methods = mutableMapOf<String, MutableList<Region>>()
         val dex = mutableMapOf<String, MutableList<Region>>()
@@ -340,13 +342,23 @@ internal object AndroidBinary {
                         .distinct()
                         .sorted()
                         .toList()
-                if (section.isBlank() && payload.isBlank() && labels.isEmpty()) {
+                val compiled = AndroidOat.at(oat[remote].orEmpty(), offset, offset + 1)
+                val compiledPage = AndroidOat.at(oat[remote].orEmpty(), start, start + pageSize)
+                if (section.isBlank() && payload.isBlank() && labels.isEmpty() && compiled.isEmpty()) {
                     null
                 } else {
-                    mapOf("sequence" to row["sequence"]?.toLong(), "section" to section, "dex" to payload, "page_methods" to labels)
+                    mapOf(
+                        "sequence" to row["sequence"]?.toLong(),
+                        "section" to section,
+                        "dex" to (compiled.map { it.dex }.distinct().singleOrNull() ?: payload),
+                        "page_methods" to labels,
+                        "aot_methods" to compiled.map { "${it.dex} #${it.index}: ${it.name}" },
+                        "aot_page_methods" to compiledPage.map { "${it.dex} #${it.index}: ${it.name}" },
+                    )
                 }
             }
         Json.write(output.resolve("fault_details.json"), details)
+        return warnings
     }
 
     internal fun findSymbolizer(

@@ -24,6 +24,8 @@ data class AndroidFaultRequest(
     val allowIncomparable: Boolean,
     val dwarfStacks: Boolean = false,
     val reclaimMappedApks: Boolean = false,
+    val compilation: String = "speed-profile",
+    val ioEvidence: Boolean = false,
 )
 
 fun interface AndroidFaultWorkflow {

@@ -139,8 +139,9 @@ internal class AndroidFaultProcessor {
             )
         writeFileSizes(output, inodes.sizes, sectionEntries)
         val fileBacked = allFaults.filter { it["mapping_kind"] == "file" }
-        AndroidBinary.enrich(output, artifacts, pageSize)
+        val binaryWarnings = AndroidBinary.enrich(output, artifacts, pageSize)
         metadata["warnings"] = (metadata["warnings"] as? List<*>).orEmpty() +
+            binaryWarnings +
             AndroidBinary.symbolize(output, artifacts, metadata["llvm_symbolizer"]?.toString()?.let(Path::of))
         metadata["callchain_results"] = callchainResults
         metadata["faults"] =
@@ -160,6 +161,7 @@ internal class AndroidFaultProcessor {
                 "page_cache_insertions" to pageCache.size,
             ) + callchainResults
         metadata["processing_engine"] = "kotlin"
+        AndroidIo.export(output, metadata, pid, startup.start, startup.end) { query(trace, it) }
         metadata["processing_status"] = "complete"
         Json.write(metadataPath, metadata)
     }

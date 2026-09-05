@@ -48,6 +48,7 @@ class AndroidFaultsCommandTest {
         assertTrue(request.dwarfStacks)
         assertTrue(request.reclaimMappedApks)
         assertTrue(request.overwrite)
+        assertEquals("speed-profile", request.compilation)
     }
 
     @Test
@@ -68,7 +69,7 @@ class AndroidFaultsCommandTest {
         val result =
             command.test(
                 "--out $output --skip-collect --no-pull-artifacts " +
-                    "--compare $comparison --compare-label reordered --allow-incomparable --no-open",
+                    "--compare $comparison --compare-label reordered --allow-incomparable --compilation as-is --no-open",
             )
 
         assertEquals(0, result.statusCode, result.output)
@@ -79,6 +80,7 @@ class AndroidFaultsCommandTest {
         assertEquals(comparison.toAbsolutePath(), request.comparison)
         assertEquals("reordered", request.comparisonLabel)
         assertTrue(request.allowIncomparable)
+        assertEquals("as-is", request.compilation)
     }
 
     @Test

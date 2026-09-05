@@ -19,6 +19,30 @@ internal fun compilationStatuses(
         emptyList()
     }
 
+internal fun compilationDifferences(
+    a: Map<*, *>,
+    b: Map<*, *>,
+): List<String> {
+    val changed = mutableListOf<String>()
+    for (field in listOf("compilation_mode", "speed_profile_verified_before", "speed_profile_verified_after")) {
+        if (a[field] != b[field] || (field == "compilation_mode" && a[field] == null)) changed += field
+    }
+    for (phase in listOf("before", "after")) {
+        val field = "compilation_$phase"
+        val first = a[field] as? Map<*, *>
+        val second = b[field] as? Map<*, *>
+        val statuses = first?.get("statuses") as? List<*>
+        if (first?.get("exit_code") != 0 ||
+            second?.get("exit_code") != 0 ||
+            statuses.isNullOrEmpty() ||
+            statuses != second["statuses"]
+        ) {
+            changed += "$field.statuses"
+        }
+    }
+    return changed
+}
+
 internal fun stableAndroidSourceLabel(
     path: String,
     packageName: String,
@@ -76,7 +100,7 @@ internal class AndroidFaultReport(
                     "processing_status",
                     "simpleperf_status",
                     "reclaim_mapped_apks",
-                ).filter { a[it] == null || b[it] == null || a[it] != b[it] }
+                ).filter { a[it] == null || b[it] == null || a[it] != b[it] } + compilationDifferences(a, b)
             require(changed.isEmpty() || allowIncomparable) { "Comparison settings differ: ${changed.joinToString()}" }
             for (run in listOf(first, second)) {
                 @Suppress("UNCHECKED_CAST")
@@ -177,6 +201,14 @@ internal class AndroidFaultReport(
                                 put("section", detail["section"].orEmptyString())
                                 put("dex", detail["dex"]?.toString()?.ifBlank { null } ?: row["zip_entry_name"].orEmpty())
                                 put(
+                                    "Compiled method at fault address (content, not caller)",
+                                    (detail["aot_methods"] as? List<*>)?.joinToString("; ").orEmpty(),
+                                )
+                                put(
+                                    "Compiled methods on this page (content, not callers)",
+                                    (detail["aot_page_methods"] as? List<*>)?.joinToString("; ").orEmpty(),
+                                )
+                                put(
                                     "DEX methods on this page (content, not callers)",
                                     (detail["page_methods"] as? List<*>)?.joinToString("; ").orEmpty(),
                                 )
@@ -228,6 +260,15 @@ internal class AndroidFaultReport(
             )
         notes += (metadata["warnings"] as? List<*>)?.map { it.toString() }.orEmpty()
         notes += dwarf.warnings
+        metadata["compilation_profile_source"]?.let { notes += "Profile preparation: $it." }
+        if (metadata["io_capture"] != null) {
+            notes +=
+                "I/O context exported to io_advice_spans.csv, io_block_events.csv and io_thread_states.csv. Block activity is system-wide guest traffic, not exact app-file I/O or physical-media latency; inspect event availability and io_results."
+        }
+        if (details.values.any { (it["aot_methods"] as? List<*>)?.isNotEmpty() == true }) {
+            notes +=
+                "Compiled-method ranges come from device oatdump with matching APK DEX checksums and artifact hashes. These identify code stored at the fault address, not the caller; shared-code aliases are retained. Names may be obfuscated."
+        }
         val compilationBefore = (metadata["compilation_before"] as? Map<*, *>)?.get("statuses") as? List<*>
         val compilationAfter = (metadata["compilation_after"] as? Map<*, *>)?.get("statuses") as? List<*>
         if (!compilationBefore.isNullOrEmpty()) {

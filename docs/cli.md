@@ -34,6 +34,7 @@
 |---|---|---|
 | --package, -p | text | Package name |
 | --activity | text | Launch activity; resolved automatically when omitted |
+| --compilation | (speed-profile\|as-is) | Prepare verified profile-guided AOT before eviction, or preserve compilation for explicit experiments |
 | --device, -d | text | ADB device serial |
 | --out, -o | path | Capture output directory |
 | --settle-ms | int | Collection time after startup completes |
@@ -43,6 +44,7 @@
 | --dwarf-stacks |  | Record system-wide major-fault DWARF/ART stacks; enrich only exact, verified event matches |
 | --reclaim-mapped-apks |  | Opt in to page-out advice on other processes' read-only installed APK mappings; strict cache checks remain |
 | --no-pull-artifacts, --pull-artifacts |  | Pull APK and ART files for section attribution |
+| --io-evidence |  | Capture available block I/O and scheduler events; export separate startup context CSVs |
 | --skip-collect |  | Reprocess and report an existing exact capture |
 | --overwrite |  | Replace a non-empty output owned by mperf faults |
 | --compare | path | Second capture directory |
