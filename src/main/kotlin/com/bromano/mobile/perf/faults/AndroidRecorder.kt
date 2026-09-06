@@ -28,10 +28,10 @@ internal class AndroidRecorder private constructor(
         error("Recorder readiness timed out: ${text()}")
     }
 
-    fun stop(): String {
+    fun stop(timeoutSeconds: Long = 20): String {
         try {
             adb.rootShell("kill -INT $pid", check = false, timeout = Duration.ofSeconds(5))
-            check(process.waitFor(20, TimeUnit.SECONDS)) { "Recorder $pid did not stop within 20 seconds" }
+            check(process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) { "Recorder $pid did not stop within $timeoutSeconds seconds" }
             reader.join(5_000)
             check(!reader.isAlive) { "Recorder output did not close" }
             return text()

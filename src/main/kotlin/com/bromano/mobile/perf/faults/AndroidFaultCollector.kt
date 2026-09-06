@@ -3,6 +3,8 @@ package com.bromano.mobile.perf.faults
 import com.bromano.mobile.perf.commands.faults.AndroidFaultRequest
 import com.bromano.mobile.perf.tools.SimpleperfTools
 import com.bromano.mobile.perf.utils.Adb
+import com.bromano.mobile.perf.utils.CommandResult
+import com.bromano.mobile.perf.utils.Processes
 import com.bromano.mobile.perf.utils.ShellExecutor
 import com.bromano.mobile.perf.utils.sha256
 import java.nio.file.Files
@@ -22,6 +24,16 @@ internal class AndroidFaultCollector(
     private var capturePageSize = 0
     private var captureWarnings = mutableListOf<String>()
 
+    internal fun validateKernelPageSize(
+        pageSize: Int,
+        smaps: String,
+    ) {
+        val kernelSizes = Regex("(?m)^KernelPageSize:\\s+(\\d+) kB$").findAll(smaps).map { it.groupValues[1].toLong() * 1024 }.toSet()
+        require(pageSize > 0 && pageSize and (pageSize - 1) == 0 && kernelSizes == setOf(pageSize.toLong())) {
+            "Kernel page sizes $kernelSizes do not match userspace page size $pageSize; simulated 16 KB userspace is not supported for fault capture"
+        }
+    }
+
     fun collect(request: AndroidFaultRequest) {
         val packageName = requireNotNull(request.packageName)
         resetOutput(request.output, request.overwrite)
@@ -32,8 +44,7 @@ internal class AndroidFaultCollector(
         val abi = adb.property("ro.product.cpu.abi")
         // Prepare the same pinned recorder used by CPU profiling before any cache eviction.
         if (request.dwarfStacks) {
-            val shell = ShellExecutor()
-            SimpleperfTools(shell).sideload(Adb(adb.serial, shell))
+            adb.sideloadSimpleperf()
         }
         val pageSize =
             adb
@@ -41,6 +52,7 @@ internal class AndroidFaultCollector(
                 .stdout
                 .trim()
                 .toInt()
+        validateKernelPageSize(pageSize, adb.rootShell("cat /proc/self/smaps").stdout)
         val apkPaths = adb.packagePaths(packageName)
         capturePageSize = pageSize
         val activity = request.activity?.let { if ("/" in it) it else "$packageName/$it" } ?: adb.resolveActivity(packageName)
@@ -58,12 +70,15 @@ internal class AndroidFaultCollector(
                 "kernel" to adb.shell("uname -r").stdout.trim(),
                 "abi" to abi,
                 "page_size" to pageSize,
+                "kernel_page_size_verified" to true,
                 "online_cpus_sysfs" to adb.shell("cat /sys/devices/system/cpu/online").stdout.trim(),
                 "collector" to "perf-software-page-fault-events",
                 "collector_version" to 5,
                 "collector_clock" to "boottime",
                 "capture_native_callchains" to request.nativeStacks,
                 "simpleperf_status" to if (request.dwarfStacks) "requested" else "disabled",
+                "simpleperf_buffer_config" to
+                    mapOf("kernel_pages_per_cpu" to request.dwarfKernelPages, "user_mb" to request.dwarfUserBufferMb),
                 "cache_procedure" to "force-stop-wait+stable-target-set+sync+drop_caches+fadvise+mincore-v3",
                 "cache_max_resident_pages" to request.maxResidentPages,
                 "reboot_before_collect" to request.rebootBeforeCollect,
@@ -142,7 +157,10 @@ internal class AndroidFaultCollector(
             collector = startCollector(adb, request.nativeStacks)
             metadata["collector_start_ns"] = collector.startNs
             metadata["collector_online_cpus"] = collector.onlineCpus
-            if (request.dwarfStacks) dwarf = AndroidDwarf.start(adb)
+            if (request.dwarfStacks) {
+                dwarf =
+                    AndroidDwarf.start(adb, AndroidDwarf.Buffers(request.dwarfKernelPages, request.dwarfUserBufferMb))
+            }
             require(collector.onlineCpus == metadata["online_cpus_sysfs"]) {
                 "CPU topology changed while starting collector: sysfs=${metadata["online_cpus_sysfs"]}, collector=${collector.onlineCpus}"
             }
@@ -745,45 +763,37 @@ internal class AndroidFaultCollector(
 
     internal class Device private constructor(
         val serial: String,
+        private val hostShell: ShellExecutor,
     ) {
-        private var rootTemplate: String? = null
-        private val base = listOf("adb", "-s", serial)
+        private val adb = Adb(serial, hostShell)
 
-        fun command(vararg arguments: String): List<String> = base + arguments
+        fun command(vararg arguments: String): List<String> = adb.command(*arguments)
+
+        fun sideloadSimpleperf() = SimpleperfTools(hostShell).sideload(adb)
 
         fun run(
             vararg arguments: String,
             check: Boolean = true,
             timeout: Duration = Duration.ofSeconds(30),
-        ): CommandResult = Processes.run(base + arguments, check = check, timeout = timeout)
+        ): CommandResult = adb.run(*arguments, check = check, timeout = timeout)
 
         fun shell(
             command: String,
             check: Boolean = true,
             timeout: Duration = Duration.ofSeconds(30),
-        ): CommandResult = run("shell", command, check = check, timeout = timeout)
+        ): CommandResult = adb.shellResult(command, check = check, timeout = timeout)
 
         fun property(name: String): String = shell("getprop ${quote(name)}").stdout.trim()
 
-        fun ensureRoot() {
-            run("root", check = false)
-            run("wait-for-device")
-            val candidates = listOf("sh -c %s", "su 0 sh -c %s", "su -c %s")
-            rootTemplate =
-                candidates.firstOrNull { template ->
-                    val result = shell(template.format(quote("id")), check = false)
-                    result.exitCode == 0 && "uid=0" in result.stdout
-                }
-            requireNotNull(rootTemplate) { "Unable to acquire a root shell" }
-        }
+        fun ensureRoot() = adb.ensureRoot()
 
-        fun rootCommand(command: String): List<String> = base + listOf("shell", requireNotNull(rootTemplate).format(quote(command)))
+        fun rootCommand(command: String): List<String> = adb.rootCommand(command)
 
         fun rootShell(
             command: String,
             check: Boolean = true,
             timeout: Duration = Duration.ofSeconds(30),
-        ): CommandResult = Processes.run(rootCommand(command), check = check, timeout = timeout)
+        ): CommandResult = adb.rootShell(command, check = check, timeout = timeout)
 
         fun packagePaths(packageName: String): List<String> =
             shell("pm path ${quote(packageName)}")
@@ -828,13 +838,16 @@ internal class AndroidFaultCollector(
                 ?.trim()
                 ?: error("Unable to resolve launcher activity for $packageName")
 
-        fun pid(process: String): Long? = shell("pidof -s ${quote(process)}", check = false).stdout.trim().toLongOrNull()
+        fun pid(process: String): Long? =
+            shell("pidof -s ${quote(process)}", check = false).let { result ->
+                if (result.exitCode == 0) result.stdout.trim().toLongOrNull() else null
+            }
 
         fun reboot() {
             val previous = shell("cat /proc/sys/kernel/random/boot_id", timeout = Duration.ofSeconds(5)).stdout.trim()
             require(Regex("[0-9a-fA-F-]{36}").matches(previous)) { "Unable to establish current boot identity" }
             run("reboot", timeout = Duration.ofSeconds(15))
-            rootTemplate = null
+            adb.clearRoot()
             val deadline = System.nanoTime() + Duration.ofMinutes(3).toNanos()
             while (System.nanoTime() < deadline) {
                 val current =
@@ -859,9 +872,10 @@ internal class AndroidFaultCollector(
 
         companion object {
             fun resolve(requested: String?): Device {
+                val hostShell = ShellExecutor()
                 val rows =
-                    Processes
-                        .run(listOf("adb", "devices"))
+                    hostShell
+                        .runArguments(listOf("adb", "devices"))
                         .stdout
                         .lineSequence()
                         .drop(1)
@@ -878,7 +892,7 @@ internal class AndroidFaultCollector(
                     requested?.also { require(it in devices) { "ADB device $it is not connected" } }
                         ?: devices.singleOrNull()
                         ?: error(if (devices.isEmpty()) "No connected ADB device" else "Multiple ADB devices connected; use --device")
-                return Device(selected)
+                return Device(selected, hostShell)
             }
         }
     }

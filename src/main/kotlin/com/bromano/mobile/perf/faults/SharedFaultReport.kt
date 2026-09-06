@@ -30,6 +30,7 @@ internal class SharedFaultReport(
                         .replace("'", "&#39;"),
                 "STYLE" to Files.readString(assets.resolve("report.css")),
                 "MODEL" to Files.readString(assets.resolve("model.js")),
+                "CONTEXT" to Files.readString(assets.resolve("context.js")),
                 "STACKS" to Files.readString(assets.resolve("stacks.js")),
                 "PERFETTO" to Files.readString(assets.resolve("perfetto.js")),
                 "SCRIPT" to Files.readString(assets.resolve("report.js")),
@@ -37,7 +38,7 @@ internal class SharedFaultReport(
                 "DATA" to payload,
             )
         val document =
-            Regex("__(TITLE|STYLE|PLOTLY|DATA|SCRIPT|MODEL|STACKS|PERFETTO)__")
+            Regex("__(TITLE|STYLE|PLOTLY|DATA|SCRIPT|MODEL|STACKS|PERFETTO|CONTEXT)__")
                 .replace(Files.readString(assets.resolve("report.html"))) { replacements.getValue(it.groupValues[1]) }
         output.toAbsolutePath().parent?.let(Files::createDirectories)
         Files.writeString(output, document)

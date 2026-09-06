@@ -10,14 +10,27 @@ import java.time.Duration
 
 internal object AndroidDwarf {
     private const val REMOTE = "/data/local/tmp/android-fault-visualizer/dwarf.data"
-    const val COMMAND =
-        "${SimpleperfTools.DEVICE_PATH} record -a -c 1 -m 1024 -e major-faults:u --call-graph dwarf --post-unwind=yes " +
-            "--no-callchain-joiner --no-cut-samples --clockid boottime --no-dump-kernel-symbols " +
-            "--start_profiling_fd 1 --duration 60 -o $REMOTE"
+
+    data class Buffers(
+        val kernelPages: Int = 4096,
+        val userMb: Int = 256,
+    ) {
+        init {
+            require(kernelPages in 64..16384 && kernelPages and (kernelPages - 1) == 0) { "Invalid DWARF kernel buffer pages" }
+            require(userMb in 16..2048) { "Invalid DWARF userspace buffer MiB" }
+        }
+
+        fun command(): String =
+            "${SimpleperfTools.DEVICE_PATH} record -a -c 1 -m $kernelPages --user-buffer-size ${userMb}M " +
+                "-e major-faults:u --call-graph dwarf --post-unwind=yes " +
+                "--no-callchain-joiner --no-cut-samples --clockid boottime --no-dump-kernel-symbols " +
+                "--start_profiling_fd 1 --duration 60 -o $REMOTE"
+    }
 
     data class Running(
         val recorder: AndroidRecorder,
         val bootId: String,
+        val buffers: Buffers,
     )
 
     data class Key(
@@ -56,12 +69,15 @@ internal object AndroidDwarf {
             require(Regex("[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}").matches(it)) { "Invalid capture boot identity" }
         }
 
-    fun start(adb: AndroidFaultCollector.Device): Running {
+    fun start(
+        adb: AndroidFaultCollector.Device,
+        buffers: Buffers = Buffers(),
+    ): Running {
         require(adb.pid("simpleperf") == null) { "Another Simpleperf is already recording" }
-        val recorder = AndroidRecorder.start(adb, COMMAND)
+        val recorder = AndroidRecorder.start(adb, buffers.command())
         try {
             recorder.await(Regex("(?m)^STARTED\\r?$"), 20)
-            return Running(recorder, bootId(adb))
+            return Running(recorder, bootId(adb), buffers)
         } catch (error: Throwable) {
             recorder.abort(error)
             throw IllegalStateException(
@@ -79,43 +95,43 @@ internal object AndroidDwarf {
         output: Path,
         pull: (String, Path) -> Unit,
     ) {
-        val log = running.recorder.stop()
+        val log =
+            try {
+                running.recorder.stop(120)
+            } catch (error: Exception) {
+                Files.writeString(output.resolve("simpleperf.log"), running.recorder.text())
+                Json.write(
+                    output.resolve("simpleperf-metadata.json"),
+                    recordingHealth(running.recorder.text(), -1) + mapOf("stop_error" to error.message),
+                )
+                throw error
+            }
         Files.writeString(output.resolve("simpleperf.log"), log)
-        val summary = Regex("Samples recorded:\\s*([\\d,]+)\\.\\s*Samples lost:\\s*([\\d,]+)(?:\\s*\\([^)]*\\))?\\.").find(log)
-        val count =
-            summary
-                ?.groupValues
-                ?.get(1)
-                ?.replace(",", "")
-                ?.toLong()
-        val lost =
-            summary
-                ?.groupValues
-                ?.get(2)
-                ?.replace(",", "")
-                ?.toLong()
         val status = running.recorder.process.exitValue()
-        val valid = count != null && lost == 0L && status == 0
+        val health = recordingHealth(log, status)
+        val valid = health["integrity_passed"] == true
         val metadata =
             mutableMapOf<String, Any?>(
                 "target_pid" to capture["pid"],
-                "samples_recorded" to count,
-                "samples_lost" to lost,
-                "return_code" to status,
-                "integrity_passed" to valid,
-                "record_command" to COMMAND,
-                "kernel_buffer_pages_per_cpu" to 1024,
+                "record_command" to running.buffers.command(),
+                "kernel_buffer_pages_per_cpu" to running.buffers.kernelPages,
+                "user_buffer_bytes" to running.buffers.userMb.toLong() * 1024 * 1024,
                 "page_size" to capture["page_size"],
-                "kernel_buffer_bytes_per_cpu" to ((capture["page_size"] as? Number)?.toLong()?.times(1024)),
+                "kernel_buffer_bytes_per_cpu" to ((capture["page_size"] as? Number)?.toLong()?.times(running.buffers.kernelPages)),
                 "online_cpus" to capture["online_cpus_sysfs"],
                 "scope" to "system-wide; filtered by exact PID after capture",
                 "clock" to "boottime",
                 "joiner" to false,
                 "gap_removal" to false,
             )
+        metadata.putAll(health)
         Json.write(output.resolve("simpleperf-metadata.json"), metadata)
-        require(valid) { "Simpleperf failed integrity checks: $log" }
+        // Preserve even rejected recordings for diagnosis; never enrich faults from a lossy stream.
         pull(REMOTE, output.resolve("simpleperf.data"))
+        if (!valid) {
+            adb.rootShell("rm -f $REMOTE")
+            error("Simpleperf integrity failed; recording and diagnostics saved. ${health["recommendation"]}")
+        }
         val pid = (capture["pid"] as? Number)?.toLong()
         if (pid != null) {
             val stacks =
@@ -141,6 +157,54 @@ internal object AndroidDwarf {
             Json.write(output.resolve("simpleperf-metadata.json"), metadata)
         }
         adb.rootShell("rm -f $REMOTE")
+    }
+
+    internal fun recordingHealth(
+        log: String,
+        status: Int,
+    ): Map<String, Any?> {
+        val summary =
+            Regex(
+                "Samples recorded:\\s*([\\d,]+)(?:\\s*\\(([\\d,]+) with truncated stacks\\))?\\.\\s*" +
+                    "Samples lost:\\s*([\\d,]+)" +
+                    "(?:\\s*\\(kernelspace:\\s*([\\d,]+), userspace:\\s*([\\d,]+)\\))?\\.",
+            ).findAll(log).lastOrNull()
+
+        fun count(index: Int): Long? =
+            summary
+                ?.groupValues
+                ?.get(index)
+                ?.replace(",", "")
+                ?.toLongOrNull()
+        val recorded = count(1)
+        val truncated = count(2) ?: if (summary != null) 0L else null
+        val lost = count(3)
+        val kernel = count(4) ?: if (lost == 0L) 0L else null
+        val user = count(5) ?: if (lost == 0L) 0L else null
+        val valid = recorded != null && lost == 0L && kernel == 0L && user == 0L && truncated == 0L && status == 0
+        val recommendations =
+            buildList {
+                if (status != 0) add("Check simpleperf.log for recorder exit $status, memory limits, and permission errors.")
+                if (summary == null) add("Recorder summary missing; inspect simpleperf.log. Stack integrity is unknown.")
+                if (kernel != null && kernel > 0) add("Increase --dwarf-kernel-pages; kernel ring records were lost.")
+                if ((user ?: 0) > 0 ||
+                    (truncated ?: 0) > 0
+                ) {
+                    add("Increase --dwarf-user-buffer-mb; userspace records were lost or truncated.")
+                }
+                if (lost != null && lost > 0 && kernel == null) add("Loss location unknown; inspect simpleperf.log before tuning buffers.")
+                if (!valid) add("Keep period one and strict integrity checks; use a quieter target with enough RAM, then recollect.")
+            }
+        return mapOf(
+            "samples_recorded" to recorded,
+            "samples_lost" to lost,
+            "kernel_lost_records" to kernel,
+            "userspace_lost_records" to user,
+            "truncated_stack_samples" to truncated,
+            "return_code" to status,
+            "integrity_passed" to valid,
+            "recommendation" to recommendations.joinToString(" "),
+        )
     }
 
     fun parseSamples(text: String): List<Sample> {

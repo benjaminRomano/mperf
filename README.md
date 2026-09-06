@@ -193,6 +193,20 @@ and zero loss. No nearest-time or ordinal stitching is performed. Invalid/unboun
 explicit warning, without invalidating usable native data. A valid independent stack stream is not relabeled as exact
 page attribution when native matches are unavailable. DWARF recording is intrusive and may lose samples on large apps.
 
+DWARF defaults to 4096 kernel ring pages per CPU and a 256 MiB userspace buffer. Tune these independently with
+`--dwarf-kernel-pages` (power of two, 64–16384) and `--dwarf-user-buffer-mb` (16–2048). Kernel-ring loss calls for
+kernel headroom; increasing only the userspace buffer cannot repair it. Larger buffers consume target RAM and can
+change the workload. Keep capture period one and zero-loss validation; compare buffer settings alongside results.
+Rejected Simpleperf recordings retain their data, log, and loss diagnostics for inspection, but never supply attribution.
+
+The **Capture health** tab summarizes cache verification, loss, stack coverage, symbol resolution, and I/O availability.
+Failed capture/processing attempts also write `capture-health.html` when owned capture evidence is available; the CLI
+still fails, and the health-only report contains no fault plots. Raw evidence remains intact.
+The **I/O context** tab aligns faults, app-file cache insertions, ART advice, app blocking, and available system block
+events on the startup clock. It shows the whole capture, independently of the fault source/thread filters; a zoom can
+be applied to the fault views. Alignment is correlation, not proof that a block request caused a particular fault.
+Missing streams do not mean zero I/O, and unfinished intervals have no invented completion time.
+
 A page fault is a memory exception, not necessarily a syscall. Captured kernel frames are retained when supplied;
 mperf does not invent a syscall frame. Major-fault count is not a count of storage reads or all pages read. Readahead,
 explicit reads, and ART advice can populate many pages before their later minor faults. Whole-file VDEX views include
@@ -431,6 +445,49 @@ The Instruments benchmark uses the checked-in saved trace and reports average co
 JDK, Xcode, trace, and JMH configuration, consolidating table exports and overlapping the table-of-contents query reduced
 the measured average from 3,912.775 ms/op to 2,005.120 ms/op (48.8%). Treat local results as comparative measurements;
 `xctrace`, Xcode, host load, and hardware materially affect absolute timings.
+
+### CI compatibility and failure evidence
+
+Normal PR checks retain the single API 35 emulator and iOS Simulator jobs. A separate **Android compatibility**
+workflow runs weekly and on manual dispatch: API 29, 33, 35, and 36 with 4 KB kernel pages. Each run checks the device's
+actual API level, `getconf PAGE_SIZE`, and `/proc/self/smaps` kernel page size before installing fixtures;
+a missing image or mismatched page size fails visibly instead of silently reducing coverage. This matrix tests capture
+mechanics, not performance, and does not extend the normal PR or release gate. Compatibility jobs install pinned NDK
+29.0.14206865 and also run `AndroidFaultCaptureIntegrationTest`: strict zero-resident-page cache verification, as-is
+compilation, mapped-APK reclaim, I/O evidence, and exact DWARF coverage for startup major faults. Unsupported capabilities
+fail the run; they are not treated as skipped coverage. The ordinary PR emulator job does not run this expensive capture.
+
+The hosted x86_64 matrix does **not** claim 16 KB kernel coverage. Android's `google_apis_ps16k` x86_64 image
+[simulates 16 KB userspace on a 4 KB kernel](https://android-developers.googleblog.com/2024/08/adding-16-kb-page-size-to-android.html);
+that does not validate this collector's kernel page-index or perf-ring calculations. Real 16 KB testing requires an
+[ARM64 target with a 16 KB kernel](https://source.android.com/docs/core/architecture/16kb-page-size/16kb), through the
+manual dedicated-device path below or a local ARM64 emulator. The runner requires ARM64 and matching actual kernel and
+userspace page sizes whenever 16384 is selected; it never substitutes userspace alignment testing for kernel coverage.
+
+Failed jobs upload test reports and fixture capture outputs/logs for seven days. The iOS retry keeps both attempts,
+including the first failure when the retry passes. Uploads never sweep temporary folders, global logcat, device bug
+reports, or user capture directories. Raw fixture traces can still contain system scheduling data; use only dedicated,
+empty test devices and Simulators. Set `MPERF_INTEGRATION_ARTIFACTS` to retain local integration outputs as well.
+
+Physical rooted-device testing is opt-in and manual from `main` only. Before enabling it:
+
+- Provision a dedicated Linux x64 runner labeled `mperf-rooted-android`, with JDK/Android SDK prerequisites and one
+  disposable, already-rooted device containing no personal apps, accounts, or data. Use an ephemeral runner and restrict
+  its runner group to this repository's `.github/workflows/compatibility.yml` on `refs/heads/main`; never allow PR jobs.
+- Protect the `rooted-device-compatibility` environment with required reviewers and a `main`-only deployment policy.
+  Set its `MPERF_ANDROID_SERIAL` variable, and set repository variable `MPERF_PHYSICAL_CI_ENABLED=true` only after these
+  protections are in place. Self-hosted labels alone are not an access-control boundary.
+- Manually dispatch **Android compatibility** on `main`, enable `physical_device`, and select the device's existing API
+  and page size. The workflow requires existing root and never installs root, reboots, or reconfigures page size;
+  capture setup may restart the ADB daemon via `adb root`. It checks out the
+  dispatch's trusted main commit, accepts no alternate source ref, and never runs pull-request code on the device runner.
+
+This workflow configuration is not evidence of a successful physical-hardware run; check the corresponding Actions run
+and artifacts before claiming device compatibility. For a local dedicated emulator run after installing the NDK:
+
+```bash
+bash scripts/run-android-integration.sh emulator-5554 35 4096 emulator faults
+```
 
 ## Releasing
 

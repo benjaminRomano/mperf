@@ -1,5 +1,7 @@
 package com.bromano.mobile.perf.utils
 
+import java.time.Duration
+
 private const val ANDROID_N_SDK_VERSION = 24
 
 /**
@@ -9,7 +11,56 @@ class Adb(
     device: String?,
     private val shell: Shell,
 ) {
-    val deviceOpts = device?.let { "-s $it" } ?: ""
+    private val base = listOf("adb") + (device?.let { listOf("-s", it) } ?: emptyList())
+    private var rootTemplate: String? = null
+    val deviceOpts = device?.let { "-s ${quoteArgument(it)}" } ?: ""
+
+    fun command(vararg arguments: String): List<String> = base + arguments
+
+    fun run(
+        vararg arguments: String,
+        check: Boolean = true,
+        timeout: Duration = Duration.ofSeconds(30),
+    ): CommandResult = shell.runArguments(command(*arguments), check, timeout)
+
+    fun shellResult(
+        command: String,
+        check: Boolean = true,
+        timeout: Duration = Duration.ofSeconds(30),
+    ): CommandResult = run("shell", command, check = check, timeout = timeout)
+
+    fun clearRoot() {
+        rootTemplate = null
+    }
+
+    fun ensureRoot() {
+        clearRoot()
+        run("root", check = false)
+        run("wait-for-device")
+        requireNotNull(findRootTemplate()) { "Unable to acquire a root shell" }
+    }
+
+    fun rootCommand(command: String): List<String> =
+        this.command("shell", requireNotNull(rootTemplate) { "Root shell has not been established" }.format(shellQuote(command)))
+
+    fun rootShell(
+        command: String,
+        check: Boolean = true,
+        timeout: Duration = Duration.ofSeconds(30),
+    ): CommandResult = shell.runArguments(rootCommand(command), check, timeout)
+
+    private fun findRootTemplate(): String? {
+        rootTemplate?.let { return it }
+        rootTemplate =
+            listOf("sh -c %s", "su 0 sh -c %s", "su -c %s").firstOrNull { template ->
+                val result = shellResult(template.format(shellQuote("id")), check = false)
+                result.exitCode == 0 && Regex("(?:^|\\s)uid=0(?:\\D|$)").containsMatchIn(result.stdout)
+            }
+        return rootTemplate
+    }
+
+    private fun quoteArgument(value: String): String =
+        if (value.isNotEmpty() && value.all { it.isLetterOrDigit() || it in "_./:-" }) value else shellQuote(value)
 
     val sdkVersion by lazy {
         shell("getprop ro.build.version.sdk").trim().toIntOrNull() ?: Int.MAX_VALUE
@@ -29,17 +80,9 @@ class Adb(
         ignoreErrors: Boolean = false,
         withRoot: Boolean = false,
     ): String {
-        val escapedCommand =
-            if (withRoot && isRootable()) {
-                innerQuoteForShell(command)
-            } else {
-                command
-            }
-
-        return runCommand(
-            "shell${if (withRoot && isRootable()) " " + getRunAsRootCommand() else ""} $escapedCommand",
-            ignoreErrors = ignoreErrors,
-        )
+        val template = if (withRoot) findRootTemplate() else null
+        val remoteCommand = template?.let { shellQuote(it.format(shellQuote(command))) } ?: command
+        return runCommand("shell $remoteCommand", ignoreErrors = ignoreErrors)
     }
 
     // TODO: Should we always perform escaping?
@@ -47,53 +90,8 @@ class Adb(
         command: String,
         withRoot: Boolean = false,
     ): String {
-        val quotedCommand = innerQuoteForShell(command)
-        val prefix =
-            if (withRoot && isRootable()) {
-                getRunAsRootCommand().ifBlank { "sh -c" }
-            } else {
-                "sh -c"
-            }
-
-        return "shell $prefix $quotedCommand"
-    }
-
-    /**
-     * Perform escaping for necessary inputs
-     */
-    private fun innerQuoteForShell(str: String): String {
-        val escaped =
-            str
-                .replace("\\", "\\\\")
-                .replace("'", "\\'")
-                .replace("\"", "\\\"")
-                .replace("\t", "\\\t")
-                .replace("\n", "\\\n")
-        return "\"'\"$escaped\"\'\""
-    }
-
-    /**
-     * Best-effort get run as root command
-     *
-     * Thi invocation of su will differ depending on device
-     */
-    private fun getRunAsRootCommand(): String {
-        try {
-            if (!isRootable()) {
-                return ""
-            }
-
-            val suOutput = shell("\"su --help 2>&1\"")
-            return if (suOutput.contains("usage: su [WHO [COMMAND...]]") ||
-                suOutput.contains("usage: su [UID[,GID[,GID2]...]] [COMMAND [ARG...]]")
-            ) {
-                "su 0 sh -c"
-            } else {
-                "su -c"
-            }
-        } catch (_: ShellCommandException) {
-            return ""
-        }
+        val template = (if (withRoot) findRootTemplate() else null) ?: "sh -c %s"
+        return "shell ${shellQuote(template.format(shellQuote(command)))}"
     }
 
     /**
@@ -109,7 +107,7 @@ class Adb(
             else -> "/data/data/$packageName/cache/"
         }
 
-    fun isRootable() = shell("which su", ignoreErrors = true).isNotBlank()
+    fun isRootable() = findRootTemplate() != null
 
     fun isRunning(packageName: String): Boolean =
         if (sdkVersion >= ANDROID_N_SDK_VERSION) {
@@ -151,14 +149,14 @@ class Adb(
         remotePath: String,
         localPath: String,
     ) {
-        runCommand("pull $remotePath $localPath")
+        runCommand("pull ${quoteArgument(remotePath)} ${quoteArgument(localPath)}")
     }
 
     fun push(
         localPath: String,
         remotePath: String,
     ) {
-        runCommand("push $localPath $remotePath")
+        runCommand("push ${quoteArgument(localPath)} ${quoteArgument(remotePath)}")
     }
 
     fun delete(

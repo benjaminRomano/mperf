@@ -19,7 +19,6 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 import java.util.zip.GZIPInputStream
-import kotlin.io.path.createTempFile
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -139,7 +138,7 @@ class AndroidProfilerIntegrationTest {
 
         val adb = createAdb()
         assertBenchmarkSampleAvailable(adb)
-        val output = createTempFile("macrobenchmark-perfetto", ".perfetto-trace")
+        val output = IntegrationArtifacts.androidTrace("macrobenchmark-perfetto", ".perfetto-trace")
 
         PerfettoProfiler(shell, adb, PerfettoOptions()).executeTest(
             packageName = packageName,
@@ -159,7 +158,7 @@ class AndroidProfilerIntegrationTest {
 
         val adb = createAdb()
         assertBenchmarkSampleAvailable(adb)
-        val output = createTempFile("macrobenchmark-simpleperf", ".perfetto-trace")
+        val output = IntegrationArtifacts.androidTrace("macrobenchmark-simpleperf", ".perfetto-trace")
 
         SimpleperfProfiler(shell, adb, defaultSimpleperfOptions()).executeTest(
             packageName = packageName,
@@ -178,7 +177,7 @@ class AndroidProfilerIntegrationTest {
 
         val adb = createAdb()
         assertBenchmarkSampleAvailable(adb)
-        val output = createTempFile("macrobenchmark-method", ".trace")
+        val output = IntegrationArtifacts.androidTrace("macrobenchmark-method", ".trace")
 
         MethodProfiler(adb).executeTest(
             packageName = packageName,
@@ -198,7 +197,7 @@ class AndroidProfilerIntegrationTest {
         val adb = createAdb()
         assertTargetAvailable(adb)
         adb.shell("am force-stop $packageName", ignoreErrors = true)
-        val output = createTempFile("adhoc-perfetto", ".perfetto-trace")
+        val output = IntegrationArtifacts.androidTrace("adhoc-perfetto", ".perfetto-trace")
 
         PerfettoProfiler(
             shell,
@@ -219,7 +218,7 @@ class AndroidProfilerIntegrationTest {
         val adb = createAdb()
         assertTargetAvailable(adb)
         adb.shell("am force-stop $packageName", ignoreErrors = true)
-        val output = createTempFile("adhoc-simpleperf", ".json.gz")
+        val output = IntegrationArtifacts.androidTrace("adhoc-simpleperf", ".json.gz")
 
         SimpleperfProfiler(
             shell,
@@ -240,7 +239,7 @@ class AndroidProfilerIntegrationTest {
         val adb = createAdb()
         assertTargetAvailable(adb)
         adb.shell("am force-stop $packageName", ignoreErrors = true)
-        val output = createTempFile("adhoc-method", ".trace")
+        val output = IntegrationArtifacts.androidTrace("adhoc-method", ".trace")
 
         MethodProfiler(
             adb,

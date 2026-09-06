@@ -35,6 +35,9 @@ jobs:
       - name: Test install and uninstall scripts
         run: scripts/test-install.sh
 
+      - name: Test compatibility runner safety checks
+        run: node --test src/test/javascript/android_compatibility.test.cjs
+
       - name: Build, test, lint, and package
         run: ./gradlew build shadowJar jmhClasses generateDocs --no-daemon --stacktrace --warning-mode=all
 
@@ -46,6 +49,16 @@ jobs:
           java -jar build/libs/*-all.jar --help
           java -jar build/libs/*-all.jar faults android --help
           java -jar build/libs/*-all.jar faults ios --help
+
+      - name: Preserve build failure reports
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: build-failure-${{ github.run_attempt }}
+          retention-days: 7
+          path: |
+            build/reports/
+            build/test-results/
 
   ios-integration:
     name: iOS Simulator integration
@@ -65,20 +78,43 @@ jobs:
         uses: ./.github/actions/setup-build
 
       - name: Run Instruments integration tests
+        id: ios-tests
+        shell: bash
+        env:
+          MPERF_INTEGRATION_ARTIFACTS: ${{ github.workspace }}/build/integration-artifacts
         run: |
+          mkdir -p "$MPERF_INTEGRATION_ARTIFACTS"
           for attempt in 1 2; do
             if ./gradlew test --no-daemon --stacktrace \
               -Dmperf.integration.ios.enabled=true \
               --tests com.bromano.mobile.perf.integration.IosProfilerIntegrationTest \
-              --tests com.bromano.mobile.perf.gecko.InstrumentsConverterTest; then
+              --tests com.bromano.mobile.perf.gecko.InstrumentsConverterTest \
+              2>&1 | tee "$MPERF_INTEGRATION_ARTIFACTS/fixture-attempt-$attempt.log"; then
               exit 0
             fi
+            echo "had_failure=true" >> "$GITHUB_OUTPUT"
+            attempt_dir="$MPERF_INTEGRATION_ARTIFACTS/attempt-$attempt"
+            mkdir -p "$attempt_dir"
+            for report in build/reports/tests build/test-results; do
+              if [ -d "$report" ]; then cp -R "$report" "$attempt_dir/"; fi
+            done
             if [ "$attempt" -eq 2 ]; then
               exit 1
             fi
             echo "::warning::Xcode failed the live integration run; resetting Simulators and retrying once"
             xcrun simctl shutdown all || true
           done
+
+      - name: Preserve iOS fixture failure evidence
+        if: failure() || steps.ios-tests.outputs.had_failure == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ios-fixture-failure-${{ github.run_attempt }}
+          retention-days: 7
+          path: |
+            build/reports/tests/
+            build/test-results/
+            build/integration-artifacts/
 
   android-integration:
     name: Android emulator integration
@@ -107,6 +143,16 @@ jobs:
           arch: x86_64
           profile: pixel_6
           disable-animations: true
-          script: |
-            integration-fixtures/android/install.sh emulator-5554
-            ./gradlew test --no-daemon --stacktrace --console=plain -Dmperf.integration.enabled=true -Dmperf.integration.device=emulator-5554 --tests com.bromano.mobile.perf.integration.AndroidProfilerIntegrationTest
+          script: bash scripts/run-android-integration.sh emulator-5554 35 4096
+
+      - name: Preserve Android fixture failure evidence
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: android-fixture-failure-${{ github.run_attempt }}
+          retention-days: 7
+          path: |
+            build/reports/tests/
+            build/test-results/
+            build/integration-artifacts/
+            integration-fixtures/android/*/build/reports/

@@ -1,0 +1,135 @@
+name: Android compatibility
+
+# Deliberately not a pull_request workflow or a release gate.
+on:
+  schedule:
+    - cron: "23 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      physical_device:
+        description: Also run on the dedicated, pre-rooted fixture device (main only)
+        type: boolean
+        default: false
+      physical_api:
+        description: Expected API level of the preconfigured physical device
+        type: choice
+        options: ["29", "30", "31", "32", "33", "34", "35", "36"]
+        default: "35"
+      physical_page_size:
+        description: Expected kernel page size (16384 requires ARM64); never changes device configuration
+        type: choice
+        options: ["4096", "16384"]
+        default: "4096"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-compatibility-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  emulator:
+    name: Android API ${{ matrix.api }} / ${{ matrix.page_size }} bytes
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      ANDROID_NDK_VERSION: "29.0.14206865"
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - { api: 29, target: google_apis, page_size: 4096 }
+          - { api: 33, target: google_apis, page_size: 4096 }
+          - { api: 35, target: google_apis, page_size: 4096 }
+          - { api: 36, target: google_apis, page_size: 4096 }
+          # x86_64 ps16k simulates 16K userspace on a 4K kernel, not 16K fault/page-cache units.
+          # Real 16K kernel capture coverage is opt-in on the dedicated ARM64 physical device below.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up JVM build
+        uses: ./.github/actions/setup-build
+      - name: Enable KVM access
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Test capture compatibility
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: ${{ matrix.api }}
+          target: ${{ matrix.target }}
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          ndk: ${{ env.ANDROID_NDK_VERSION }}
+          script: ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/$ANDROID_NDK_VERSION" bash scripts/run-android-integration.sh emulator-5554 ${{ matrix.api }} ${{ matrix.page_size }} emulator faults
+      - name: Preserve compatibility failure evidence
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: compatibility-api${{ matrix.api }}-${{ matrix.page_size }}-${{ github.run_attempt }}
+          retention-days: 7
+          path: |
+            build/reports/tests/
+            build/test-results/
+            build/integration-artifacts/
+            integration-fixtures/android/*/build/reports/
+
+  physical:
+    name: Trusted rooted Android device
+    # No PR events, PR refs, arbitrary checkout refs, or caller-selected runner labels.
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      inputs.physical_device &&
+      vars.MPERF_PHYSICAL_CI_ENABLED == 'true'
+    environment: rooted-device-compatibility
+    runs-on: [self-hosted, Linux, X64, mperf-rooted-android]
+    timeout-minutes: 75
+    concurrency:
+      group: mperf-rooted-android-device
+      cancel-in-progress: false
+    env:
+      ANDROID_NDK_VERSION: "29.0.14206865"
+    steps:
+      - name: Checkout trusted main commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up JDK
+        uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Set up isolated Gradle execution
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          validate-wrappers: true
+          cache-disabled: true
+      - name: Test dedicated physical fixture device
+        env:
+          ANDROID_SERIAL: ${{ vars.MPERF_ANDROID_SERIAL }}
+          EXPECTED_API: ${{ inputs.physical_api }}
+          EXPECTED_PAGE_SIZE: ${{ inputs.physical_page_size }}
+        run: |
+          sdkmanager --install "ndk;$ANDROID_NDK_VERSION"
+          export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/$ANDROID_NDK_VERSION"
+          bash scripts/run-android-integration.sh "$ANDROID_SERIAL" "$EXPECTED_API" "$EXPECTED_PAGE_SIZE" physical faults
+      - name: Preserve physical fixture failure evidence
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: physical-fixture-failure-${{ github.run_attempt }}
+          retention-days: 7
+          path: |
+            build/reports/tests/
+            build/test-results/
+            build/integration-artifacts/
+            integration-fixtures/android/*/build/reports/

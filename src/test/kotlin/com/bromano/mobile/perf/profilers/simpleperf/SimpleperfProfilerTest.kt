@@ -3,6 +3,7 @@ package com.bromano.mobile.perf.profilers.simpleperf
 import com.bromano.mobile.perf.SimpleperfOptions
 import com.bromano.mobile.perf.androidProfilerOptions
 import com.bromano.mobile.perf.utils.Adb
+import com.bromano.mobile.perf.utils.CommandResult
 import com.bromano.mobile.perf.utils.Shell
 import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.core.parse
@@ -30,6 +31,7 @@ class SimpleperfProfilerTest {
     @BeforeEach
     fun setUp() {
         shell = mock()
+        whenever(shell.runArguments(any(), any(), any())).thenReturn(CommandResult(1, "", "not root"))
         adb = Adb(null, shell)
 
         // Make device appear non-rootable by default
@@ -141,7 +143,7 @@ class SimpleperfProfilerTest {
         verify(shell).startProcess(
             argThat {
                 contains("adb ") &&
-                    contains(" shell sh -c ") &&
+                    contains(" shell 'sh -c ") &&
                     contains("simpleperf record --app com.example.app -o /data/local/tmp/perf.data") &&
                     contains("-e cpu-clock -f 4000 -g")
             },
@@ -170,14 +172,13 @@ class SimpleperfProfilerTest {
     @Test
     fun executes_simpleperf_rootable_uses_sideload_binary_and_buffer_size() {
         // Make device rootable
-        whenever(shell.runCommand(argThat { contains("adb") && contains("which su") }, any())).thenReturn("/system/bin/su")
-        // su --help output detection (to choose correct su variant)
         whenever(
-            shell.runCommand(
-                argThat { contains("adb") && contains("su --help") },
+            shell.runArguments(
+                argThat { last() == "su 0 sh -c 'id'" },
+                any(),
                 any(),
             ),
-        ).thenReturn("usage: su [WHO [COMMAND...]]")
+        ).thenReturn(CommandResult(0, "uid=0(root)", ""))
         // ABI for sideload map
         whenever(shell.runCommand(argThat { contains("adb") && contains("getprop ro.product.cpu.abi") }, any())).thenReturn("arm64-v8a")
         // Sideload check: simpleperf already present and sha256 matches

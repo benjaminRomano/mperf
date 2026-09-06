@@ -1,5 +1,6 @@
 package com.bromano.mobile.perf.faults
 
+import com.bromano.mobile.perf.utils.CommandResult
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files

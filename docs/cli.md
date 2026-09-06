@@ -40,6 +40,8 @@
 | --settle-ms | int | Collection time after startup completes |
 | --max-resident-pages | int | Maximum verified resident app-file pages allowed before launch (strict default: 0) |
 | --reboot-before-collect |  | Reboot the target before cache eviction and collection |
+| --dwarf-kernel-pages | int | Simpleperf ring-buffer pages per CPU (power of two) |
+| --dwarf-user-buffer-mb | int | Simpleperf userspace buffer in MiB; larger buffers consume target RAM |
 | --native-stacks |  | Capture exact native/ART frame-pointer callchains with each fault |
 | --dwarf-stacks |  | Record system-wide major-fault DWARF/ART stacks; enrich only exact, verified event matches |
 | --reclaim-mapped-apks |  | Opt in to page-out advice on other processes' read-only installed APK mappings; strict cache checks remain |
