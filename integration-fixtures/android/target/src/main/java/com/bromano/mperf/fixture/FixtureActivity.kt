@@ -8,6 +8,8 @@ import androidx.tracing.trace
 import kotlin.concurrent.thread
 
 class FixtureActivity : Activity() {
+    private val startupAllocations = mutableListOf<ByteArray>()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(
@@ -18,10 +20,25 @@ class FixtureActivity : Activity() {
             },
         )
         runProfiledWorkload()
+        window.decorView.postDelayed({
+            trace("mperf.fixture.before-fully-drawn") { allocatePages() }
+            reportFullyDrawn()
+            window.decorView.postDelayed({
+                trace("mperf.fixture.after-fully-drawn") { allocatePages() }
+            }, 300)
+        }, 1_000)
+    }
+
+    private fun allocatePages() {
+        startupAllocations += ByteArray(8 * 1024 * 1024).also { pages ->
+            for (offset in pages.indices step 4096) pages[offset] = 1
+        }
     }
 
     private fun runProfiledWorkload() {
         thread(name = "mperf-fixture-workload", isDaemon = true) {
+            // A worker's similarly named section must not end the startup window.
+            trace("reportFullyDrawn.fixture-worker") { Thread.sleep(1) }
             val deadline = System.nanoTime() + 5_000_000_000L
             var value = 1L
             val asyncCookie = System.identityHashCode(this)

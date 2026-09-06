@@ -141,6 +141,13 @@ is never guessed. Page-cache events include the app process and background or ke
 exact device/inode identities of app-owned files. These events are correlated I/O evidence, not proof that a specific
 cache insertion caused a later fault.
 
+Android fault analysis ends at the first main-thread `reportFullyDrawn*` marker in the captured app process when
+available, otherwise at Perfetto's first-frame timestamp. The marker's start timestamp is an exclusive cutoff shared
+by faults, page-cache events, DWARF matching, and I/O context. `capture_metadata.json` records `startup.end_marker`
+and `startup.first_frame_ts_end` so the selected window can be audited. Collection continues for `--settle-ms`
+(default 750 ms) after initial display and state capture; increase it for apps that report fully drawn later, for
+example `--settle-ms 3000`. A marker outside the recorded trace cannot be selected.
+
 The per-fault rows come from userspace events actually delivered by the perf subsystem. They are not reconstructed
 from `/proc/<pid>/stat` or process-level `min_flt`/`maj_flt` counters, so the report can contain fewer rows than those
 aggregate kernel counters. Conversely, the page-cache tracepoint is a different signal: it records cache insertions

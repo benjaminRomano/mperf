@@ -22,6 +22,10 @@ Run every Android collector end to end:
 
 The tests remain skipped unless `mperf.integration.enabled=true` is set. Emulator results validate collection mechanics only; use a physical, non-debuggable, profileable device build for meaningful performance comparisons.
 
+The activity allocates pages one second after launch, calls `reportFullyDrawn()`, then allocates more pages 300 ms
+later. The opt-in faults integration test captures both allocations and verifies that only the first falls inside
+the analysis window. A similarly named worker-thread marker checks that selection is scoped to the main thread.
+
 The fixture defaults are:
 
 - Target package: `com.bromano.mperf.fixture`

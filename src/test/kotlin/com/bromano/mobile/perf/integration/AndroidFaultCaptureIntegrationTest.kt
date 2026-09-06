@@ -4,7 +4,10 @@ import com.bromano.mobile.perf.commands.faults.AndroidFaultRequest
 import com.bromano.mobile.perf.commands.faults.DefaultAndroidFaultWorkflow
 import com.bromano.mobile.perf.faults.AndroidDwarf
 import com.bromano.mobile.perf.faults.BundledFaultEngine
+import com.bromano.mobile.perf.faults.Csv
 import com.bromano.mobile.perf.faults.Json
+import com.bromano.mobile.perf.tools.NativeTraceProcessor
+import com.bromano.mobile.perf.utils.Processes
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Timeout
@@ -37,7 +40,7 @@ class AndroidFaultCaptureIntegrationTest {
                     activity = "com.bromano.mperf.fixture/.FixtureActivity",
                     device = device,
                     output = output,
-                    settleMs = 200,
+                    settleMs = 2_000,
                     maxResidentPages = 0,
                     rebootBeforeCollect = false,
                     nativeStacks = false,
@@ -63,6 +66,52 @@ class AndroidFaultCaptureIntegrationTest {
         assertTrue(number(faults["total"]) > 0, "Expected startup faults from the fixture")
         val startup = metadata["startup"] as Map<*, *>
         assertTrue(number(startup["duration_ns"]) > 0)
+        assertEquals("reportFullyDrawn", startup["end_marker"])
+        val end = (startup["ts_end"] as Number).toLong()
+        val firstFrame = (startup["first_frame_ts_end"] as Number).toLong()
+        assertTrue(end > firstFrame, "Fixture reports fully drawn after initial display")
+        val slices = output.resolve("fixture-markers.csv")
+        Files.writeString(
+            slices,
+            Processes
+                .run(
+                    listOf(
+                        NativeTraceProcessor().materialize().toString(),
+                        "-Q",
+                        """
+                        SELECT slice.name, slice.ts, slice.dur FROM slice
+                        JOIN thread_track ON thread_track.id = slice.track_id
+                        JOIN thread USING (utid) JOIN process USING (upid)
+                        WHERE process.pid = ${metadata["pid"]} AND thread.is_main_thread = 1
+                          AND (slice.name GLOB 'reportFullyDrawn*' OR slice.name GLOB 'mperf.fixture.*fully-drawn')
+                        ORDER BY slice.ts;
+                        """.trimIndent(),
+                        output.resolve("faults.pftrace").toString(),
+                    ),
+                ).stdout
+                .trimStart(),
+        )
+        val markers = Csv.read(slices)
+        assertEquals(end, markers.first { it.getValue("name").startsWith("reportFullyDrawn") }.getValue("ts").toLong())
+        val before = markers.single { it["name"] == "mperf.fixture.before-fully-drawn" }
+        val after = markers.single { it["name"] == "mperf.fixture.after-fully-drawn" }
+        val processed = Csv.read(output.resolve("all_faults.csv"))
+        val raw = Csv.read(output.resolve("fault_events.csv"))
+
+        fun inSlice(
+            row: Map<String, String>,
+            slice: Map<String, String>,
+        ): Boolean {
+            val begin = slice.getValue("ts").toLong()
+            return (row["timestamp_ns"] ?: row.getValue("ts")).toLong() in begin until begin + slice.getValue("dur").toLong()
+        }
+        assertTrue(before.getValue("ts").toLong() > firstFrame)
+        assertTrue(processed.any { inSlice(it, before) }, "Include faults after first frame and before fully drawn")
+        assertTrue(
+            raw.any { it["pid"] == metadata["pid"].toString() && inSlice(it, after) },
+            "Capture post-marker app faults to prove exclusion",
+        )
+        assertTrue(processed.none { it.getValue("ts").toLong() >= end }, "Exclude faults at and after fully drawn")
         val cache = metadata["cache_verification"] as Map<*, *>
         assertEquals("before_launch", cache["phase"])
         assertEquals(0, number(cache["resident_pages"]))

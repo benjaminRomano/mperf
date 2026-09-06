@@ -33,8 +33,10 @@ class AndroidFaultsCommand(
     private val device by option("-d", "--device", help = "ADB device serial")
     private val output by option("-o", "--out", help = "Capture output directory")
         .path(mustExist = false, canBeFile = false)
-    private val settleMs by option("--settle-ms", help = "Collection time after startup completes")
-        .int()
+    private val settleMs by option(
+        "--settle-ms",
+        help = "Collection time after initial display; increase to capture delayed reportFullyDrawn markers",
+    ).int()
         .default(750)
         .validate { require(it in 0..10_000) { "must be between 0 and 10000" } }
     private val maxResidentPages by option(

@@ -40,13 +40,16 @@ internal class AndroidFaultProcessor {
         val mapping: MapEntry,
     )
 
-    private data class Startup(
+    internal data class Startup(
         val id: Long,
         val start: Long,
         val end: Long,
-        val duration: Long,
         val type: String?,
-    )
+        val firstFrameEnd: Long,
+        val endMarker: String,
+    ) {
+        val duration: Long get() = end - start
+    }
 
     fun process(output: Path) {
         val metadataPath = output.resolve("capture_metadata.json")
@@ -57,7 +60,7 @@ internal class AndroidFaultProcessor {
         }
         validateIntegrity(metadata)
         val trace = output.resolve("faults.pftrace")
-        val startup = queryStartup(trace, metadata["package"].toString())
+        val startup = queryStartup(trace, metadata["package"].toString(), (metadata["pid"] as Number).toLong())
         val traceFailures =
             query(
                 trace,
@@ -78,6 +81,8 @@ internal class AndroidFaultProcessor {
                 "ts_end" to startup.end,
                 "duration_ns" to startup.duration,
                 "type" to startup.type,
+                "first_frame_ts_end" to startup.firstFrameEnd,
+                "end_marker" to startup.endMarker,
             )
 
         val pid = (metadata["pid"] as Number).toLong()
@@ -179,30 +184,44 @@ internal class AndroidFaultProcessor {
         }
     }
 
-    private fun queryStartup(
+    internal fun queryStartup(
         trace: Path,
         packageName: String,
+        pid: Long,
+        runQuery: (Path, String) -> List<Map<String, String>> = ::query,
     ): Startup {
         val escaped = packageName.replace("'", "''")
         val rows =
-            query(
+            runQuery(
                 trace,
                 """
                 INCLUDE PERFETTO MODULE android.startup.startups;
-                SELECT startup_id, ts, ts_end, dur, package, startup_type
-                FROM android_startups WHERE package = '$escaped' ORDER BY ts;
+                SELECT startup_id, ts, ts_end, startup_type,
+                  (SELECT MIN(slice.ts)
+                   FROM slice
+                   JOIN thread_track ON thread_track.id = slice.track_id
+                   JOIN thread USING (utid)
+                   JOIN process USING (upid)
+                   JOIN android_startup_processes AS sp USING (upid)
+                   WHERE sp.startup_id = startup.startup_id AND process.pid = $pid
+                     AND thread.is_main_thread = 1 AND slice.name GLOB 'reportFullyDrawn*'
+                     AND slice.ts > startup.ts) AS fully_drawn_ts
+                FROM android_startups AS startup WHERE package = '$escaped' ORDER BY ts;
                 """.trimIndent(),
             )
         require(rows.size == 1) {
             "Expected exactly one startup for $packageName, found ${rows.size}"
         }
         val row = rows.single()
+        val fullyDrawn = row["fully_drawn_ts"]?.toLongOrNull()
+        val firstFrame = row.getValue("ts_end").toLong()
         return Startup(
             id = row.getValue("startup_id").toLong(),
             start = row.getValue("ts").toLong(),
-            end = row.getValue("ts_end").toLong(),
-            duration = row.getValue("dur").toLong(),
+            end = fullyDrawn ?: firstFrame,
             type = row["startup_type"]?.takeUnless { it.isBlank() || it == "[NULL]" },
+            firstFrameEnd = firstFrame,
+            endMarker = if (fullyDrawn != null) "reportFullyDrawn" else "first_frame",
         )
     }
 

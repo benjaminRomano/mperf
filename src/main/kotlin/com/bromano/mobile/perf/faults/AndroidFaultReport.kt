@@ -325,6 +325,13 @@ internal class AndroidFaultReport(
                 "DWARF stacks matched ${dwarf.coverage["matched_startup_major_faults"]} / ${dwarf.coverage["startup_major_faults"]} major faults using exact raw identities. Unmatched events retain native stacks; no nearest-time matching."
         }
         val startup = metadata["startup"] as? Map<*, *>
+        notes +=
+            if (startup?.get("end_marker") == "reportFullyDrawn") {
+                "Startup faults end at the app's first main-thread reportFullyDrawn marker (exclusive)."
+            } else {
+                "Startup faults end at the first frame (exclusive); no app reportFullyDrawn marker was selected. " +
+                    "Increase --settle-ms if the app reports fully drawn later in startup."
+            }
         return mutableMapOf(
             "label" to label,
             "subtitle" to
