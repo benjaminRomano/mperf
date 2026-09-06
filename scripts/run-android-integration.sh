@@ -64,6 +64,7 @@ tests=(--tests com.bromano.mobile.perf.integration.AndroidProfilerIntegrationTes
 if [[ "$suite" == faults ]]; then
   export MPERF_TEST_FAULTS=true
   tests+=(--tests com.bromano.mobile.perf.integration.AndroidFaultCaptureIntegrationTest)
+  tests+=(--tests com.bromano.mobile.perf.faults.AndroidStartupWindowTest)
 fi
 ./gradlew test --no-daemon --stacktrace --console=plain \
   -Dmperf.integration.enabled=true "-Dmperf.integration.device=$device" \

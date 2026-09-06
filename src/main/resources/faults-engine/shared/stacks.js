@@ -138,7 +138,18 @@
       width = 1,
       height = 1,
       left = 0,
-      span = 1;
+      span = 1,
+      pendingFrame = null;
+    function scheduleRender() {
+      if (!global.requestAnimationFrame) {
+        render(state);
+      } else if (pendingFrame === null) {
+        pendingFrame = global.requestAnimationFrame(() => {
+          pendingFrame = null;
+          render(state);
+        });
+      }
+    }
     function clampViewport() {
       span = Math.max(
         1 / Math.max(1, state?.events.length || 1),
@@ -149,7 +160,7 @@
     function pan(pixels) {
       left += (pixels / width) * span;
       clampViewport();
-      render(state);
+      scheduleRender();
     }
     function zoom(factor, anchor = 0.5) {
       const point = left + anchor * span;
@@ -157,7 +168,7 @@
       clampViewport();
       left = point - anchor * span;
       clampViewport();
-      render(state);
+      scheduleRender();
     }
     const listeners = [];
     function listen(type, callback, options) {
@@ -236,14 +247,20 @@
       const dpr = Math.min(global.devicePixelRatio || 1, 2);
       canvas.style.width = width + "px";
       canvas.style.height = height + "px";
-      canvas.width = Math.round(width * dpr);
-      canvas.height = Math.round(height * dpr);
+      const pixelWidth = Math.round(width * dpr);
+      const pixelHeight = Math.round(height * dpr);
+      if (canvas.width !== pixelWidth) canvas.width = pixelWidth;
+      if (canvas.height !== pixelHeight) canvas.height = pixelHeight;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, width, height);
       ctx.font = "11px -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
       ctx.textBaseline = "alphabetic";
     }
     function render(next) {
+      if (pendingFrame !== null) {
+        global.cancelAnimationFrame(pendingFrame);
+        pendingFrame = null;
+      }
       if (!next) return;
       const changed =
         state?.events !== next.events || state?.mode !== next.mode;
@@ -317,7 +334,16 @@
             cell,
           });
         const y = height - AXIS;
-        model.events.forEach((event, i) => {
+        const visibleFirst = Math.max(
+          0,
+          Math.floor(left * model.events.length),
+        );
+        const visibleEnd = Math.min(
+          model.events.length,
+          Math.ceil((left + span) * model.events.length),
+        );
+        for (let i = visibleFirst; i < visibleEnd; i++) {
+          const event = model.events[i];
           ctx.fillStyle = event.major ? "#b86b12" : "#3973b9";
           ctx.fillRect(origin + i * column, y + 1, Math.max(0.5, column), 3);
           if (state.selectedId === event.id) {
@@ -330,7 +356,7 @@
               y + 3,
             );
           }
-        });
+        }
         const count = model.events.length;
         const first = Math.min(
           count - 1,
@@ -371,6 +397,7 @@
       );
     }
     function locate(event) {
+      if (pendingFrame !== null) render(state);
       const rect = canvas.getBoundingClientRect();
       const x = ((event.clientX - rect.left) * width) / rect.width;
       const y = ((event.clientY - rect.top) * height) / rect.height;
@@ -474,9 +501,15 @@
       if (event.ctrlKey || event.metaKey) {
         event.preventDefault();
         const rect = canvas.getBoundingClientRect();
+        const unit =
+          event.deltaMode === 1
+            ? 16
+            : event.deltaMode === 2
+              ? scroll.clientHeight || 600
+              : 1;
         zoom(
-          Math.exp(Math.max(-100, Math.min(100, event.deltaY)) * 0.003),
-          Math.max(0, Math.min(1, (event.clientX - rect.left) / width)),
+          Math.exp(Math.max(-100, Math.min(100, event.deltaY * unit)) * 0.012),
+          Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)),
         );
       } else if (
         event.shiftKey ||
@@ -496,7 +529,7 @@
       else if (key === "a" || key === "d")
         pan((key === "a" ? -1 : 1) * width * 0.12);
       else if (key === "+" || key === "=" || key === "-")
-        zoom(key === "-" ? 1.25 : 0.8);
+        zoom(key === "-" ? 2 : 0.5);
       else if (key === "escape") {
         focusPath = [];
         left = 0;
@@ -514,6 +547,8 @@
         callback("onFocus", "", state?.events.length || 0);
       },
       destroy() {
+        if (pendingFrame !== null) global.cancelAnimationFrame(pendingFrame);
+        pendingFrame = null;
         scroll.removeEventListener("keydown", navigate);
         scroll.removeEventListener("wheel", wheel);
         listeners.forEach(([type, listener, options]) =>

@@ -19,16 +19,24 @@ const event = (id, address, source = "a", page = 0) => ({
 });
 test("detail dock clamps dragging while reserving space for the main view", () => {
   assert.deepEqual(FaultModel.detailSize(800, 300), {
-    min: 90, max: 680, height: 300,
+    min: 90,
+    max: 680,
+    height: 300,
   });
   assert.equal(FaultModel.detailSize(800, -100).height, 90);
   assert.equal(FaultModel.detailSize(800, 1200).height, 680);
 });
 test("detail dock remains bounded in short or hidden viewports", () => {
   assert.deepEqual(FaultModel.detailSize(100, 300), {
-    min: 60, max: 60, height: 60,
+    min: 60,
+    max: 60,
+    height: 60,
   });
-  assert.deepEqual(FaultModel.detailSize(-10, 300), { min: 0, max: 0, height: 0 });
+  assert.deepEqual(FaultModel.detailSize(-10, 300), {
+    min: 0,
+    max: 0,
+    height: 0,
+  });
 });
 test("unplottable addresses retain records without bridging adjacent deltas", () => {
   const events = [
@@ -99,4 +107,23 @@ test("region filters distinguish DEX payloads, archive entries and binary sectio
     "Entry · resources.arsc",
   );
   assert.ok(FaultModel.matchesRegion({}, ""));
+});
+
+test("source totals reconcile file-backed majors with excluded JIT and unknown mappings", () => {
+  const majors = Array.from({ length: 459 }, (_, id) => ({
+    id,
+    major: true,
+    fileBacked: id < 447,
+  }));
+  const filtered = FaultModel.sourceVisibility(majors, true);
+  assert.equal(filtered.visible.length, 447);
+  assert.equal(filtered.hidden.length, 12);
+  assert.equal(filtered.visible.length + filtered.hidden.length, majors.length);
+  assert.deepEqual(FaultModel.sourceVisibility(majors, false), {
+    visible: majors,
+    hidden: [],
+  });
+  const subset = majors.filter((e) => e.id >= 440);
+  assert.equal(FaultModel.sourceVisibility(subset, true).visible.length, 7);
+  assert.equal(FaultModel.sourceVisibility(subset, true).hidden.length, 12);
 });

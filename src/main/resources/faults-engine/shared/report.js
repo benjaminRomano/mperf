@@ -78,7 +78,7 @@ function clearDetail() {
 function layout(ytitle, height = 550) {
   return {
     height,
-    margin: { l: 105, r: 25, t: 35, b: 60 },
+    margin: { l: 105, r: 25, t: 45, b: 65 },
     font: {
       family: "-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif",
       size: 12,
@@ -89,16 +89,17 @@ function layout(ytitle, height = 550) {
     hoverlabel: { namelength: -1 },
     xaxis: {
       title: { text: "Elapsed startup time (ms)" },
+      automargin: true,
       gridcolor: "#e5e8ec",
       zeroline: false,
     },
     yaxis: {
-      title: { text: ytitle },
+      title: { text: ytitle, standoff: 12 },
       gridcolor: "#e5e8ec",
       zeroline: false,
       automargin: true,
     },
-    legend: { orientation: "h", x: 0, y: 1.08 },
+    legend: { orientation: "h", x: 0, y: 1.02, yanchor: "bottom" },
     showlegend: true,
   };
 }
@@ -162,6 +163,7 @@ function drawIo() {
       .join("") +
     "</ul>";
   const l = layout("", Math.max(180, $("ioPlot").parentElement.clientHeight));
+  l.width = $("ioPlot").parentElement.clientWidth;
   l.margin.l = 150;
   l.xaxis.range = [0, io.duration || 1];
   l.yaxis = {
@@ -175,6 +177,8 @@ function drawIo() {
 }
 function changeRun() {
   run = REPORT.runs[Number($("run").value)];
+  $("includeNonFile").checked = false;
+  $("includeNonFileLabel").hidden = !run.fileBackedOnly;
   document.body.classList.toggle("health-only", Boolean(run.healthOnly));
   perfetto.setRun(run);
   $("tab-health").hidden = !run.health;
@@ -253,9 +257,8 @@ function update() {
     thread = $("thread").value;
   const section = $("section").value,
     query = $("search").value.trim().toLowerCase();
-  sourceEvents = run.events.filter(
+  const matching = run.events.filter(
     (e) =>
-      (!run.fileBackedOnly || e.fileBacked) &&
       (kind === "all" || (kind === "major") === e.major) &&
       (!thread || e.thread === thread) &&
       FaultModel.matchesRegion(e, section) &&
@@ -270,6 +273,11 @@ function update() {
           .toLowerCase()
           .includes(query)),
   );
+  const visibility = FaultModel.sourceVisibility(
+    matching,
+    run.fileBackedOnly && !$("includeNonFile").checked,
+  );
+  sourceEvents = visibility.visible;
   events = sourceEvents.filter((e) => !source || e.source === source);
   syncFileViews();
   $("selectionCount").textContent =
@@ -277,8 +285,14 @@ function update() {
     " matching faults / " +
     fmt(run.events.length) +
     " captured" +
-    (run.fileBackedOnly
-      ? " · file-backed only; anonymous and unknown mappings hidden"
+    (visibility.hidden.length
+      ? " · " +
+        fmt(sourceEvents.length) +
+        " file-backed + " +
+        fmt(visibility.hidden.length) +
+        " anonymous / unknown hidden = " +
+        fmt(matching.length) +
+        " before source selection"
       : "");
   $("rangeStatus").textContent = range
     ? (range.field === "time" ? "Time: " : "Recorded index: ") +
@@ -331,7 +345,12 @@ function drawSources() {
       a[0].localeCompare(b[0]),
   );
   $("sourceNote").textContent =
-    fmt(ranked.length) + " sources · filtered counts, major-first";
+    fmt(ranked.length) +
+    " sources · " +
+    fmt(sourceEvents.filter((e) => e.major).length) +
+    " major + " +
+    fmt(sourceEvents.filter((e) => !e.major).length) +
+    " minor shown";
   $("sources").innerHTML =
     ranked
       .map(
@@ -427,8 +446,9 @@ function drawAccess() {
         : "";
   const l = layout(
     title,
-    Math.max(180, document.querySelector(".plot-scroll").clientHeight),
+    Math.max(180, $("access").parentElement.clientHeight),
   );
+  l.width = $("access").parentElement.clientWidth;
   l.xaxis.title.text = order
     ? "Recorded fault index"
     : "Elapsed startup time (ms)";
@@ -436,15 +456,12 @@ function drawAccess() {
   if (mode === "lanes") {
     l.yaxis = {
       tickvals: keys,
-      ticktext: keys.map((k) => {
-        const s = sourceLabel(k);
-        return s.length > 29 ? s.slice(0, 12) + "…" + s.slice(-16) : s;
-      }),
+      ticktext: keys.map((k) => escapeHtml(sourceLabel(k))),
       categoryorder: "array",
       categoryarray: keys.slice().reverse(),
       range: [-0.5, keys.length - 0.5],
       tickfont: { size: 11 },
-      automargin: false,
+      automargin: true,
     };
     l.margin.l = 180;
     l.height = Math.max(l.height, keys.length * 22 + 100);
@@ -547,7 +564,7 @@ function drawAccess() {
     (order
       ? " Indices retain their original positions when minor faults are hidden."
       : "");
-  $("locality").textContent = run.fileBackedOnly
+  $("locality").textContent = run.fileBackedOnly && !$("includeNonFile").checked
     ? "File-backed minor faults include cache hits and copy-on-write; counts alone do not measure readahead."
     : "Minor includes cache hits, anonymous allocation, and copy-on-write; this view alone cannot measure readahead efficacy.";
   if (keys.length === 1) {
@@ -791,7 +808,7 @@ document
   );
 REPORT.runs.forEach((r, i) => option($("run"), i, r.label));
 $("run").addEventListener("change", changeRun);
-for (const id of ["kind", "source", "thread", "section"])
+for (const id of ["kind", "source", "thread", "section", "includeNonFile"])
   $(id).addEventListener("change", update);
 $("search").addEventListener("input", update);
 $("view").addEventListener("change", () => {
@@ -800,6 +817,7 @@ $("view").addEventListener("change", () => {
 });
 $("axis").addEventListener("change", drawAccess);
 $("reset").addEventListener("click", () => {
+  $("includeNonFile").checked = false;
   $("kind").value = "major";
   $("source").value = "";
   $("thread").value = "";
@@ -845,13 +863,15 @@ window.addEventListener("resize", () => {
   if (activeTab === "io") drawIo();
 });
 let resizeFrame;
-new ResizeObserver(() => {
+const plotResizeObserver = new ResizeObserver(() => {
   cancelAnimationFrame(resizeFrame);
   resizeFrame = requestAnimationFrame(() => {
-    drawStacks();
     if (activeTab === "pages") drawAccess();
+    if (activeTab === "io") drawIo();
   });
-}).observe(document.querySelector(".plot-scroll"));
+});
+plotResizeObserver.observe($("access").parentElement);
+plotResizeObserver.observe($("ioPlot").parentElement);
 new ResizeObserver(() => {
   if (activeTab === "stacks" || activeTab === "flame") drawStacks();
 }).observe($("stackScroll"));

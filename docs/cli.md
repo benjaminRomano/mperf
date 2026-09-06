@@ -37,7 +37,7 @@
 | --compilation | (speed-profile\|as-is) | Prepare verified profile-guided AOT before eviction, or preserve compilation for explicit experiments |
 | --device, -d | text | ADB device serial |
 | --out, -o | path | Capture output directory |
-| --settle-ms | int | Collection time after startup completes |
+| --settle-ms | int | Collection time after initial display; increase to capture delayed reportFullyDrawn markers |
 | --max-resident-pages | int | Maximum verified resident app-file pages allowed before launch (strict default: 0) |
 | --reboot-before-collect |  | Reboot the target before cache eviction and collection |
 | --dwarf-kernel-pages | int | Simpleperf ring-buffer pages per CPU (power of two) |
