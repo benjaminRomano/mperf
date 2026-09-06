@@ -123,7 +123,7 @@ interactive Plotly visualizations. Reports are written to `artifacts/faults/` by
 versioned analysis engine into `~/.mperf/cache/faults-engine/`. Capture orchestration, trace preprocessing, VDEX/DEX
 validation, Instruments XML parsing, and report generation run in Kotlin. No Python or `uv` runtime is needed for
 either fault command. Android and iOS use the same offline viewer and bundled Plotly assets.
-Android preprocessing downloads the host's pinned Perfetto v51.2 native trace processor on first use, verifies its
+Android preprocessing downloads the host's pinned Perfetto v58.2 native trace processor on first use, verifies its
 size and SHA-256, and reuses the verified cache afterward. That first download requires network access.
 
 The report stays within the browser viewport. Sources, plots, and the collapsible selected-fault dock scroll
@@ -363,7 +363,7 @@ On first run, `~/.mperf/config.yml` is created. The following keys are supported
 | `ios.bundleIdentifier`          | _unset_ | Preferred bundle identifier for `ios start`; avoids `-b/--bundle`.                                                                                       |
 | `ios.deviceId`                  | _unset_ | Default iOS device/simulator UDID when no `--device` is provided.                                                                                        |
 | `traceHostUrl`                  | _unset_ | HTTP endpoint handling multipart `POST /trace` uploads and `GET /trace/<id>` downloads from the same base path, enabling shareable performance data.     |
-| `perfettoUrl`                   | _unset_ | Base URL (for example `https://perfetto.example.com`) of a self-hosted Perfetto UI used when deep-linking uploaded traces; bypasses Perfetto CSP limits. |
+| `perfettoUrl`                   | _unset_ | Optional self-hosted Perfetto UI. Public HTTPS trace hosting works with the official UI without this setting. |
 
 Example:
 
@@ -397,9 +397,26 @@ Point `traceHostUrl` to `http://127.0.0.1:8080/trace` to test trace uploading lo
 
 #### Sharing Perfetto Traces
 
-To make uploaded traces open directly in Perfetto UI, configure `perfettoUrl` with the base URL of your self-hosted Perfetto instance. The official `https://ui.perfetto.dev` enforces a strict [Content Security Policy](https://perfetto.dev/docs/visualization/deep-linking-to-perfetto-ui#why-can-39-t-i-just-pass-a-url-) that blocks downloads from arbitrary origins, so a custom host is required for shared URLs to load successfully. A GitHub Pages reference setup with CSP modified can be found [here](https://github.com/benjaminRomano/perfetto).
+Since Perfetto v54, the official UI can open public HTTPS trace URLs directly. The host must allow unauthenticated
+GET requests and CORS from `https://ui.perfetto.dev`; no custom UI is required. See
+[Perfetto deep linking](https://perfetto.dev/docs/visualization/deep-linking-to-perfetto-ui).
+Local files still use a short-lived loopback server on port 9001, which the official UI permits. Allow the browser's
+local-network permission when prompted. Fault reports use
+Perfetto's `postMessage` handoff so they can serve their associated trace from any local report port. Neither local
+path uploads traces. `perfettoUrl` remains available for teams using their own viewer.
 
 ## Development
+
+The Kotlin CLI is organized by responsibility under `src/main/kotlin/com/bromano/mobile/perf`:
+
+- `profilers/`: Android and iOS recording workflows; `faults/`: startup fault capture, attribution, and reports.
+- `tools/`: pinned Simpleperf, tracebox, and host Trace Processor provisioning.
+- `utils/`: device/shell access, configuration, and browser opening; `gecko/`: profile conversion.
+- `src/main/resources/faults-engine/`: native collectors and shared offline report assets.
+
+Android 10+ uses the device's built-in Perfetto service. Older devices use pinned tracebox v58.2. Simpleperf CPU
+and DWARF fault collection share the pinned NDK prebuilt; downloads and cached device binaries are SHA-256 verified.
+Update tool revisions and checksums in `tools/`, not individual recording workflows.
 
 - Build: `./gradlew build`
 - Test: `./gradlew test`
@@ -419,7 +436,10 @@ the measured average from 3,912.775 ms/op to 2,005.120 ms/op (48.8%). Treat loca
 
 - Releases are created by pushing a SemVer Git tag such as `v1.2.3` or `v1.2.3-rc.1`.
 - Use the repository's `$release-mperf` skill in [`.codex/skills/release-mperf`](.codex/skills/release-mperf/SKILL.md) to run the preflight, publish the tag, and verify the result.
-- The GitHub Actions workflow validates the wrapper and tag, builds, tests, lints, verifies generated docs and the packaged CLI, and sets the Gradle project version from the tag.
+- The release workflow requires successful build, Android emulator, and iOS Simulator CI jobs for the exact tagged
+  source commit on `main`. It then validates the wrapper and tag, builds/tests on Linux, verifies docs and the packaged
+  CLI, and sets the version from the tag. Device tests run in CI, not again during publication; live integration runs
+  never reuse Gradle test results from another device session.
 - Assets uploaded to the GitHub Release:
   - `mperf-<version>-all.jar` (fat JAR with `Implementation-Version` in the manifest)
   - `mperf-<version>-all.jar.sha256`

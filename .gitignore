@@ -46,5 +46,7 @@ bin/
 local.properties
 
 /artifacts/
+/output/
+/.playwright-cli/
 
 /TASKS.md

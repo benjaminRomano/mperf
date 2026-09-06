@@ -27,8 +27,6 @@ import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.core.Context
 import com.github.ajalt.clikt.core.main
 import com.github.ajalt.clikt.core.subcommands
-import io.ktor.client.HttpClient
-import io.ktor.client.engine.java.Java
 
 class MobilePerfCommand : CliktCommand() {
     override fun help(context: Context) = "A CLI for mobile performance testing"
@@ -39,40 +37,34 @@ class MobilePerfCommand : CliktCommand() {
 fun main(args: Array<String>) {
     val config = readConfig()
     val shell = ShellExecutor()
-    val httpClient = HttpClient(Java)
-    try {
-        // TODO: Set up real DI at some point
-        val profileOpener = ProfileOpener(shell, config.traceHostUrl, config.perfettoUrl, httpClient)
-        val profilerExecutor =
-            ProfilerExecutorImpl(
-                mapOf(
-                    ProfilerFormat.PERFETTO to { shell, device, options ->
-                        PerfettoProfiler(shell, Adb(device, shell), options as PerfettoOptions)
-                    },
-                    ProfilerFormat.SIMPLEPERF to { shell, device, options ->
-                        SimpleperfProfiler(shell, Adb(device, shell), options as SimpleperfOptions)
-                    },
-                    ProfilerFormat.METHOD to { shell, device, _ -> MethodProfiler(Adb(device, shell)) },
-                    ProfilerFormat.INSTRUMENTS to { shell, device, options ->
-                        (options as InstrumentsOptions).let {
-                            InstrumentsProfiler(
-                                XcodeUtils(device, shell),
-                                InstrumentsProfilerOptions(
-                                    it.template,
-                                    it.instruments,
-                                    it.timeLimit,
-                                ),
-                            )
-                        }
-                    },
-                ),
-                profileOpener,
-            )
+    val profileOpener = ProfileOpener(shell, config.traceHostUrl, config.perfettoUrl)
+    val profilerExecutor =
+        ProfilerExecutorImpl(
+            mapOf(
+                ProfilerFormat.PERFETTO to { shell, device, options ->
+                    PerfettoProfiler(shell, Adb(device, shell), options as PerfettoOptions)
+                },
+                ProfilerFormat.SIMPLEPERF to { shell, device, options ->
+                    SimpleperfProfiler(shell, Adb(device, shell), options as SimpleperfOptions)
+                },
+                ProfilerFormat.METHOD to { shell, device, _ -> MethodProfiler(Adb(device, shell)) },
+                ProfilerFormat.INSTRUMENTS to { shell, device, options ->
+                    (options as InstrumentsOptions).let {
+                        InstrumentsProfiler(
+                            XcodeUtils(device, shell),
+                            InstrumentsProfilerOptions(
+                                it.template,
+                                it.instruments,
+                                it.timeLimit,
+                            ),
+                        )
+                    }
+                },
+            ),
+            profileOpener,
+        )
 
-        createRootCommand(shell, config, profilerExecutor, profileOpener).main(args)
-    } finally {
-        httpClient.close()
-    }
+    createRootCommand(shell, config, profilerExecutor, profileOpener).main(args)
 }
 
 /**

@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Centralized Android tool provisioning, aligned tracebox and host Trace Processor to Perfetto v58.2, and reused
+  the current pinned Simpleperf prebuilt for CPU and DWARF fault capture.
+- Updated Gradle to 9.7.1 and removed the upload-only Ktor and Kotlin serialization dependencies in favor of JDK HTTP.
+- Updated Kotlin to 2.4.10, Protobuf to 4.36.0, Jackson to 2.22.2, JUnit to 6.1.3, Shadow to 9.6.1,
+  and GitHub Actions to current immutable pins.
+- Updated the isolated Android fixture to AGP 9.3.0 and Tracing 2.0.0-beta01, removing its Gradle 10 deprecation warning.
+- Open public HTTPS traces in the official Perfetto UI without requiring a custom deployment. Local trace serving
+  uses a temporary, exact-file URL and cleans up when browser opening fails.
+- Shared JVM setup across CI jobs and gated releases on exact-source CI, avoiding repeated Simulator recording
+  during publication. Live integration tests no longer reuse cached Gradle results. Grouped dependency updates.
+
 ## [1.1.1] - 2026-09-05
 
 ### Added
@@ -106,5 +121,5 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Made the release installer require a valid checksum asset and reject mismatches before replacing an installed JAR.
 - Pinned the Gradle distribution, profiler binaries, release artifacts, and third-party GitHub Actions to verified checksums or immutable revisions, and added GitHub artifact provenance attestations for published JARs.
 
-[Unreleased]: https://github.com/benjaminromano/mperf/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/benjaminromano/mperf/compare/v1.1.1...HEAD
 [1.1.0]: https://github.com/benjaminromano/mperf/compare/v1.0.5...v1.1.0

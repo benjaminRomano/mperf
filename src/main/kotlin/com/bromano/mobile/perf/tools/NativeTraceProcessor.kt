@@ -1,4 +1,4 @@
-package com.bromano.mobile.perf.faults
+package com.bromano.mobile.perf.tools
 
 import com.bromano.mobile.perf.utils.sha256
 import java.net.URI
@@ -14,7 +14,7 @@ import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 import java.time.Duration
 
-/** Native prebuilts pinned to the same Perfetto v51.2 manifest as the former upstream Python launcher. */
+/** Native prebuilts pinned to the upstream Perfetto prebuilt manifest. */
 internal class NativeTraceProcessor(
     private val cache: Path = Path.of(System.getProperty("user.home"), ".mperf", "cache", "trace-processor"),
     private val artifact: Artifact = hostArtifact(),
@@ -26,7 +26,7 @@ internal class NativeTraceProcessor(
         val checksum: String,
     ) {
         val url: String get() =
-            "https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v51.2/" +
+            "https://commondatastorage.googleapis.com/perfetto-luci-artifacts/${PerfettoTools.VERSION}/" +
                 "$platform/trace_processor_shell" + if (platform.startsWith("windows")) ".exe" else ""
     }
 
@@ -79,15 +79,15 @@ internal class NativeTraceProcessor(
     companion object {
         private val downloadLock = Any()
 
-        // Source: Perfetto tools/roll-prebuilts v51.2, trace_processor_shell manifest.
+        // Source: Perfetto tools/release/roll-prebuilts v58.2, trace_processor_shell manifest.
         private val artifacts =
             listOf(
-                Artifact("mac-amd64", 10934464, "6b6f74b6c0e1f67365f5099d5fcdded20612329733ee7aa893a8f5ad80876356"),
-                Artifact("mac-arm64", 10081800, "f29d80cd9c9fb400ed29bc014ce573c85b69ca50ad3679b1ae3d2eab76d4f399"),
-                Artifact("linux-amd64", 11160240, "9e70b7c057d906b25a44b42638f1ed87bc38ee11610e199375ec10b0fedcc7ff"),
-                Artifact("linux-arm", 8242220, "68ed4b2cd721404d69580c911d5f0dc786f7dce280fea8b99830d9d8ab0eff71"),
-                Artifact("linux-arm64", 10635832, "61f3341cbdb0282b85d4594ce2f8d9dfcea8173776d38d33cb5eb4b035f7b621"),
-                Artifact("windows-amd64", 10905088, "b2ffcb1eb343662f55c95dcafeeeee7ff706e9ffa23713ffd73de79b1ce1baa5"),
+                Artifact("mac-amd64", 14854504, "3927a2767eadd140db3ff4fe0dfbf1bde35c1f56501149cd367f5cee898bef27"),
+                Artifact("mac-arm64", 13597976, "d29864d1ba3b36855527bb1b0ca3aa7f703cdce338b9680bb922c5c151b358fa"),
+                Artifact("linux-amd64", 14897560, "58042408e6cc861fb1a731c26bb082dc222285561eaa4e12a48a8b2b90dca7b9"),
+                Artifact("linux-arm", 10962664, "09683fed93a3452d9dac1f5165a592ec9fec82fba90be2c5dd764c8f9a449e33"),
+                Artifact("linux-arm64", 14086160, "0e6e0c5452c505c8d46fe472fd196a0d17d963460727e2ce2013b02aa1309555"),
+                Artifact("windows-amd64", 14439936, "adfa6bad3d72be3ba9b83fa2b17b69fa13b3ab1cad0f42e52b86188bd5f0f997"),
             ).associateBy(Artifact::platform)
 
         internal fun hostArtifact(

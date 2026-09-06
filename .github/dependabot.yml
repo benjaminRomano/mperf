@@ -6,17 +6,9 @@ updates:
       interval: weekly
       day: monday
     groups:
-      kotlin-and-kotlinx:
-        patterns:
-          - "org.jetbrains.kotlin*"
-          - "org.jetbrains.kotlinx*"
-      ktor:
-        patterns:
-          - "io.ktor*"
-      protobuf:
-        patterns:
-          - "com.google.protobuf*"
-    open-pull-requests-limit: 10
+      jvm-dependencies:
+        patterns: ["*"]
+    open-pull-requests-limit: 3
 
   - package-ecosystem: github-actions
     directory: /

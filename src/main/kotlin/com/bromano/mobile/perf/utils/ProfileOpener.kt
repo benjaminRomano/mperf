@@ -2,58 +2,30 @@ package com.bromano.mobile.perf.utils
 
 import com.bromano.mobile.perf.ProfilerFormat
 import com.bromano.mobile.perf.gecko.InstrumentsConverter
-import com.sun.net.httpserver.HttpExchange
+import com.google.gson.JsonParser
 import com.sun.net.httpserver.HttpServer
-import io.ktor.client.HttpClient
-import io.ktor.client.engine.java.Java
-import io.ktor.client.plugins.ResponseException
-import io.ktor.client.request.forms.InputProvider
-import io.ktor.client.request.forms.MultiPartFormDataContent
-import io.ktor.client.request.forms.formData
-import io.ktor.client.request.post
-import io.ktor.client.request.setBody
-import io.ktor.client.statement.bodyAsText
-import io.ktor.http.HttpHeaders
-import io.ktor.utils.io.streams.asInput
-import kotlinx.coroutines.runBlocking
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
 import java.io.File
-import java.io.FileInputStream
 import java.net.InetSocketAddress
 import java.net.URI
 import java.net.URLEncoder
-import java.nio.charset.StandardCharsets
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
+import java.nio.charset.StandardCharsets.UTF_8
 import java.nio.file.Files
 import java.nio.file.Path
+import java.time.Duration
+import java.util.UUID
 import java.util.concurrent.CountDownLatch
-import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
-import com.sun.net.httpserver.Headers as ExchangeHeaders
-import io.ktor.http.Headers as KtorHeaders
 
-// Default Perfetto UI only permits localhost trace fetching from 127.0.0.1:9001 via CSP.
-private const val TRACE_HTTP_PORT = 9001
-
-/**
- * Serves a given trace file locally and opens the appropriate web UI to load it.
- *
- * Generalizes Perfetto and Simpleperf openers by taking in [ProfilerFormat]
- * to determine the origin and URL format.
- */
+/** Opens local traces without uploading, unless a trace host is explicitly configured. */
 open class ProfileOpener(
     private val shell: Shell,
     private val traceHostUrl: String? = null,
     private val perfettoUrl: String? = null,
-    private val httpClient: HttpClient = HttpClient(Java),
+    private val createServer: (Int) -> HttpServer = { port -> HttpServer.create(InetSocketAddress("127.0.0.1", port), 0) },
 ) {
-    /**
-     * Serves [trace] over http://127.0.0.1:<port>/<filename> with CORS and no-cache headers,
-     * opens the appropriate UI (derived from [format]) pointing to that URL, and blocks until
-     * the UI fetches the file once.
-     *
-     * TODO: This code is unnecessarily complex, simplify it
-     */
     open fun openProfile(
         packageName: String?,
         trace: Path,
@@ -61,227 +33,155 @@ open class ProfileOpener(
         profileViewerOverride: ProfileViewer? = null,
         targetProcessId: Long? = null,
     ) {
-        var file = trace.toFile().absoluteFile
-        require(file.exists()) { "Trace not found: $file" }
-
-        val profileViewer =
+        require(Files.exists(trace)) { "Trace not found: $trace" }
+        val viewer =
             profileViewerOverride ?: when (format) {
                 ProfilerFormat.PERFETTO -> ProfileViewer.PERFETTO
-                ProfilerFormat.SIMPLEPERF,
-                ProfilerFormat.METHOD,
-                -> ProfileViewer.FIREFOX
                 ProfilerFormat.INSTRUMENTS -> ProfileViewer.INSTRUMENTS
+                ProfilerFormat.SIMPLEPERF, ProfilerFormat.METHOD -> ProfileViewer.FIREFOX
             }
-
-        // Handle Instruments traces directly without HTTP server
-        if (profileViewer == ProfileViewer.INSTRUMENTS) {
-            shell.runCommand("open -a Instruments ${shellQuote(file.absolutePath)}")
+        if (viewer == ProfileViewer.INSTRUMENTS) {
+            shell.runCommand("open -a Instruments ${shellQuote(trace.toAbsolutePath().toString())}")
             return
         }
 
-        // If the file was collected by Instruments, we may need to convert into Gecko format, if not already done so.
-        if (format == ProfilerFormat.INSTRUMENTS && !isGzipFile(file)) {
-            val intermediateOutput = Files.createTempFile("instruments", ".tar.gz")
-            InstrumentsConverter.convert(packageName, trace, processId = targetProcessId).toFile(intermediateOutput)
-            file = intermediateOutput.toFile()
-        }
-
-        val openUrlBuilder =
-            when (profileViewer) {
-                ProfileViewer.PERFETTO -> perfettoUrlBuilder()
-                ProfileViewer.FIREFOX -> firefoxUrlBuilder()
-                ProfileViewer.INSTRUMENTS -> throw IllegalStateException("INSTRUMENTS should be handled directly")
+        val converted =
+            if (format == ProfilerFormat.INSTRUMENTS && !isGzip(trace)) {
+                Files.createTempFile("mperf-instruments-", ".json.gz")
+            } else {
+                null
             }
-
-        // If the trace was successfully uploaded to trace hosting service open it using url; otherwise,
-        // fallback to loading local file into profile viewer using local web server
-        maybeUploadTrace(file)?.let {
-            // Note: A custom perfetto instance is required to circumvent CSPs
-            // Ref: https://perfetto.dev/docs/visualization/deep-linking-to-perfetto-ui#why-can-39-t-i-just-pass-a-url-
-            if (profileViewer == ProfileViewer.FIREFOX || profileViewer == ProfileViewer.PERFETTO && perfettoUrl != null) {
-                val shareableUrl = openUrlBuilder(it)
-                println("Shareable URL: $shareableUrl")
-                shell.open(shareableUrl)
-                return
-            }
-        }
-
-        val filename = file.name
-        val requested = CountDownLatch(1)
-
-        val listenPort = if (profileViewer == ProfileViewer.PERFETTO && perfettoUrl == null) TRACE_HTTP_PORT else 0
-        val server = HttpServer.create(InetSocketAddress("127.0.0.1", listenPort), 0)
-
-        server.createContext("/") { exchange ->
-            try {
-                when (exchange.requestMethod.uppercase()) {
-                    "GET" -> handleGet(exchange, file, filename, requested)
-                    "OPTIONS" -> sendNoContent(exchange)
-                    else -> sendNotFound(exchange)
-                }
-            } finally {
-                exchange.close()
-            }
-        }
-
-        val executor = Executors.newCachedThreadPool().also { server.executor = it }
-        server.start()
-
-        shell.open(openUrlBuilder("http://127.0.0.1:${server.address.port}/$filename"))
-
         try {
-            // Wait until the first successful GET of the exact filename.
-            requested.await(2, TimeUnit.MINUTES)
+            if (converted != null) InstrumentsConverter.convert(packageName, trace, processId = targetProcessId).toFile(converted)
+            val file = (converted ?: trace).toFile().absoluteFile
+            require(file.isFile) { "Expected a trace file: $file" }
+            val remote = traceHostUrl?.let { uploadTrace(file, it) }
+            if (remote != null && supportsRemoteTrace(viewer, remote, perfettoUrl != null)) {
+                val url = viewerUrl(viewer, remote)
+                println("Shareable URL: $url")
+                shell.open(url)
+            } else {
+                openLocal(file, viewer)
+            }
+        } finally {
+            converted?.let(Files::deleteIfExists)
+        }
+    }
+
+    private fun openLocal(
+        file: File,
+        viewer: ProfileViewer,
+    ) {
+        // Perfetto v54+ allows arbitrary HTTPS, but its CSP still limits local HTTP to this port.
+        val port = if (viewer == ProfileViewer.PERFETTO && perfettoUrl == null) 9001 else 0
+        val path = "/${UUID.randomUUID()}/${file.name}"
+        val requested = CountDownLatch(1)
+        val allowedOrigin =
+            if (viewer == ProfileViewer.FIREFOX) {
+                "https://profiler.firefox.com"
+            } else {
+                URI(perfettoUrl ?: "https://ui.perfetto.dev").let { "${it.scheme}://${it.rawAuthority}" }
+            }
+        val server = createServer(port)
+        server.createContext("/") { exchange ->
+            exchange.use {
+                val headers = exchange.responseHeaders
+                headers.set("Access-Control-Allow-Origin", allowedOrigin)
+                headers.set("Access-Control-Allow-Methods", "GET, OPTIONS")
+                headers.set("Access-Control-Allow-Private-Network", "true")
+                headers.set("Cache-Control", "no-store")
+                when {
+                    exchange.requestMethod == "OPTIONS" -> exchange.sendResponseHeaders(204, -1)
+                    exchange.requestMethod != "GET" -> exchange.sendResponseHeaders(405, -1)
+                    exchange.requestURI.path != path -> exchange.sendResponseHeaders(404, -1)
+                    else -> {
+                        headers.set("Content-Type", "application/octet-stream")
+                        exchange.sendResponseHeaders(200, file.length())
+                        file.inputStream().use { input -> exchange.responseBody.use(input::copyTo) }
+                        requested.countDown()
+                    }
+                }
+            }
+        }
+        server.start()
+        try {
+            val traceUrl = URI("http", null, "127.0.0.1", server.address.port, path, null, null).toASCIIString()
+            shell.open(viewerUrl(viewer, traceUrl))
+            if (!requested.await(2, TimeUnit.MINUTES)) {
+                Logger.warning("Viewer did not load the trace within 2 minutes. Open the file manually: $file")
+            }
         } finally {
             server.stop(0)
-            executor.shutdownNow()
         }
     }
 
-    private fun handleGet(
-        exchange: HttpExchange,
-        file: File,
-        expectedName: String,
-        requested: CountDownLatch,
-    ) {
-        if (exchange.requestURI.path == "/status") {
-            sendStatus(exchange)
-            return
+    private fun viewerUrl(
+        viewer: ProfileViewer,
+        trace: String,
+    ): String {
+        val encoded = URLEncoder.encode(trace, UTF_8)
+        return when (viewer) {
+            ProfileViewer.PERFETTO -> "${(perfettoUrl ?: "https://ui.perfetto.dev").trimEnd('/')}/#!/?url=$encoded"
+            ProfileViewer.FIREFOX -> "https://profiler.firefox.com/from-url/$encoded"
+            ProfileViewer.INSTRUMENTS -> error("Instruments does not use a web viewer")
         }
+    }
 
-        // Only serve /<expectedName>
-        if (exchange.requestURI.path != "/$expectedName") {
-            sendNotFound(exchange)
-            return
-        }
-
-        // Headers
-        val headers = exchange.responseHeaders
-        applyCorsHeaders(headers)
-        headers.add("Cache-Control", "no-cache")
-        headers.add("Content-Type", "application/octet-stream")
-        exchange.sendResponseHeaders(200, file.length())
-        Files.newInputStream(file.toPath()).use { input ->
-            exchange.responseBody.use { output ->
-                input.copyTo(output)
+    private fun isGzip(path: Path): Boolean =
+        Files.isRegularFile(path) &&
+            Files.newInputStream(path).use {
+                it.read() == 0x1f && it.read() == 0x8b
             }
-        }
 
-        // Signal completion after serving once
-        if (requested.count > 0) requested.countDown()
+    internal companion object {
+        fun supportsRemoteTrace(
+            viewer: ProfileViewer,
+            trace: String,
+            customPerfetto: Boolean,
+        ): Boolean = viewer == ProfileViewer.FIREFOX || customPerfetto || URI(trace).scheme.equals("https", ignoreCase = true)
     }
-
-    private fun sendStatus(exchange: HttpExchange) {
-        val body = """{"status":"ok"}""".toByteArray(StandardCharsets.UTF_8)
-        applyCorsHeaders(exchange.responseHeaders)
-        exchange.responseHeaders.add("Cache-Control", "no-cache")
-        exchange.responseHeaders.add("Content-Type", "application/json")
-        exchange.sendResponseHeaders(200, body.size.toLong())
-        exchange.responseBody.use { it.write(body) }
-    }
-
-    private fun sendNoContent(exchange: HttpExchange) {
-        applyCorsHeaders(exchange.responseHeaders)
-        exchange.responseHeaders.add("Cache-Control", "no-cache")
-        exchange.sendResponseHeaders(204, -1)
-    }
-
-    private fun sendNotFound(exchange: HttpExchange) {
-        applyCorsHeaders(exchange.responseHeaders)
-        exchange.responseHeaders.add("Cache-Control", "no-cache")
-        exchange.sendResponseHeaders(404, 0)
-    }
-
-    private fun applyCorsHeaders(headers: ExchangeHeaders) {
-        headers.add("Access-Control-Allow-Origin", "*")
-        headers.add("Access-Control-Allow-Methods", "GET, OPTIONS")
-        headers.add("Access-Control-Allow-Headers", "*")
-    }
-
-    private fun isGzipFile(file: File): Boolean {
-        FileInputStream(file).use { input ->
-            val b1 = input.read()
-            val b2 = input.read()
-            return b1 == 0x1F && b2 == 0x8B
-        }
-    }
-
-    @Serializable
-    private data class TraceUploadResponse(
-        val id: String?,
-    )
-
-    // TODO: Generalize this to support direct uploads to Azure, GCS, etc.
-    private fun maybeUploadTrace(file: File): String? {
-        val uploadUrl = traceHostUrl ?: return null
-        return try {
-            val responseBody =
-                runBlocking {
-                    httpClient
-                        .post(uploadUrl) {
-                            setBody(
-                                MultiPartFormDataContent(
-                                    formData {
-                                        append(
-                                            "file",
-                                            InputProvider { file.inputStream().asInput() },
-                                            KtorHeaders.build {
-                                                append(HttpHeaders.ContentType, "application/octet-stream")
-                                                append(
-                                                    HttpHeaders.ContentDisposition,
-                                                    "form-data; name=\"file\"; filename=\"${file.name}\"",
-                                                )
-                                            },
-                                        )
-                                    },
-                                ),
-                            )
-                        }.bodyAsText()
-                }
-
-            val id =
-                Json
-                    .decodeFromString<TraceUploadResponse>(responseBody)
-                    .id
-                    ?.takeIf { it.isNotBlank() }
-
-            if (id == null) {
-                Logger.warning(
-                    "Warning: Trace upload failed (invalid response without id): $responseBody",
-                )
-                return null
-            }
-            val baseUrl = if (uploadUrl.endsWith("/")) uploadUrl else "$uploadUrl/"
-            URI.create(baseUrl + id).toString().also {
-                println("Trace uploaded to $it")
-            }
-        } catch (error: ResponseException) {
-            val status = error.response.status
-            val body =
-                runBlocking {
-                    error.response.bodyAsText()
-                }
-            Logger.warning(
-                "Warning: Trace upload failed (HTTP ${status.value} ${status.description}): $body",
-            )
-            null
-        } catch (error: Exception) {
-            Logger.warning("Warning: Trace upload failed (${error::class.simpleName}): ${error.message}")
-            null
-        }
-    }
-
-    private fun perfettoUrlBuilder(): (String) -> String {
-        val origin = (perfettoUrl ?: "https://ui.perfetto.dev").trimEnd('/')
-        return { traceLocation ->
-            val encoded = URLEncoder.encode(traceLocation, StandardCharsets.UTF_8)
-            "$origin/#!/?url=$encoded&referrer=open_trace_in_ui"
-        }
-    }
-
-    private fun firefoxUrlBuilder(): (String) -> String =
-        { fileName ->
-            val encoded = URLEncoder.encode(fileName, StandardCharsets.UTF_8)
-            "https://profiler.firefox.com/from-url/$encoded"
-        }
 }
+
+/** The optional hosting contract is multipart POST followed by GET <endpoint>/<id>. */
+private fun uploadTrace(
+    file: File,
+    endpoint: String,
+): String? =
+    try {
+        val boundary = "mperf-${UUID.randomUUID()}"
+        val filename = file.name.map { if (it in "\r\n\"\\") '_' else it }.joinToString("")
+        val prefix =
+            "--$boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"$filename\"\r\n" +
+                "Content-Type: application/octet-stream\r\n\r\n"
+        val body =
+            HttpRequest.BodyPublishers.concat(
+                HttpRequest.BodyPublishers.ofString(prefix),
+                HttpRequest.BodyPublishers.ofFile(file.toPath()),
+                HttpRequest.BodyPublishers.ofString("\r\n--$boundary--\r\n"),
+            )
+        val request =
+            HttpRequest
+                .newBuilder(URI(endpoint))
+                .timeout(Duration.ofMinutes(2))
+                .header("Content-Type", "multipart/form-data; boundary=$boundary")
+                .POST(body)
+                .build()
+        val response =
+            HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(20)).build().use {
+                it.send(request, HttpResponse.BodyHandlers.ofString())
+            }
+        check(response.statusCode() in 200..299) { "HTTP ${response.statusCode()}" }
+        val id =
+            JsonParser
+                .parseString(response.body())
+                .asJsonObject
+                .get("id")
+                ?.asString
+        require(!id.isNullOrBlank()) { "Response has no trace id" }
+        val url = endpoint.trimEnd('/') + "/" + URLEncoder.encode(id, UTF_8).replace("+", "%20")
+        println("Trace uploaded to $url")
+        url
+    } catch (error: Exception) {
+        Logger.warning("Trace upload failed: ${error.message}. Opening the local file instead.")
+        null
+    }

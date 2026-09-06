@@ -4,11 +4,10 @@ import org.gradle.api.file.DuplicatesStrategy
 import org.gradle.api.tasks.bundling.AbstractArchiveTask
 
 plugins {
-    kotlin("jvm") version "2.4.0"
-    kotlin("plugin.serialization") version "2.4.0"
+    kotlin("jvm") version "2.4.10"
     id("com.google.protobuf") version "0.10.0"
     id("org.jlleitschuh.gradle.ktlint") version "14.2.0"
-    id("com.gradleup.shadow") version "9.5.1"
+    id("com.gradleup.shadow") version "9.6.1"
     id("me.champeau.jmh") version "0.7.3"
     application
 }
@@ -43,43 +42,31 @@ val forwardedTestSystemProperties =
     )
 
 dependencies {
-    implementation(platform("org.jetbrains.kotlin:kotlin-bom:2.4.0"))
+    implementation(platform("org.jetbrains.kotlin:kotlin-bom:2.4.10"))
     implementation("com.github.ajalt.clikt:clikt:5.1.0")
     implementation("com.github.ajalt.clikt:clikt-markdown:5.1.0")
-    implementation("com.google.protobuf:protobuf-kotlin:4.35.1")
-    implementation("com.google.protobuf:protobuf-java:4.35.1")
-    implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.22.1")
-    implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.22.1")
-    implementation("io.ktor:ktor-client-core:3.5.1")
-    implementation("io.ktor:ktor-client-java:3.5.1")
+    implementation("com.google.protobuf:protobuf-kotlin:4.36.0")
+    implementation("com.google.protobuf:protobuf-java:4.36.0")
+    implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.22.2")
+    implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.22.2")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     implementation("com.google.code.gson:gson:2.14.0")
 
     runtimeOnly("org.slf4j:slf4j-nop:2.0.18")
 
     // Testing dependencies
     testImplementation(kotlin("test"))
-    testImplementation("org.junit.jupiter:junit-jupiter:6.1.2")
+    testImplementation("org.junit.jupiter:junit-jupiter:6.1.3")
     testImplementation("org.mockito.kotlin:mockito-kotlin:6.3.0")
     testImplementation("org.mockito:mockito-core:5.23.0")
     mockitoAgent("org.mockito:mockito-core:5.23.0") { isTransitive = false }
 }
 
-tasks.test { useJUnitPlatform() }
-
 kotlin { jvmToolchain(21) }
 
 protobuf {
-    protoc { artifact = "com.google.protobuf:protoc:4.35.1" }
+    protoc { artifact = "com.google.protobuf:protoc:4.36.0" }
     generateProtoTasks { all().forEach { it.builtins { id("kotlin") } } }
-}
-
-sourceSets.main {
-    java.srcDirs(
-        "build/generated/source/proto/main/kotlin",
-        "build/generated/source/proto/main/java",
-    )
 }
 
 val faultEngineManifest = layout.projectDirectory.file("src/main/resources/faults-engine/manifest.txt")
@@ -162,6 +149,7 @@ tasks {
             "src/test/javascript/report_model.test.cjs",
             "src/test/javascript/report_stacks.test.cjs",
             "src/test/javascript/report_perfetto.test.cjs",
+            "src/test/javascript/release_ci.test.cjs",
         )
     }
 
@@ -176,7 +164,8 @@ tasks {
         }
     }
 
-    test {
+    withType<Test>().configureEach {
+        useJUnitPlatform()
         testLogging {
             events("failed")
             exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
@@ -187,6 +176,10 @@ tasks {
                 systemProperty(key, value)
             }
         }
+        // Device state is external to Gradle inputs: never reuse live test results.
+        val live = forwardedTestSystemProperties.any { it.endsWith(".enabled") && System.getProperty(it) == "true" }
+        outputs.cacheIf("Live device tests cannot be cached") { !live }
+        outputs.upToDateWhen { !live }
         jvmArgs("-javaagent:${mockitoAgent.asPath}", "-XX:+EnableDynamicAgentLoading")
     }
 }

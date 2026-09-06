@@ -1,4 +1,4 @@
-package com.bromano.mobile.perf.faults
+package com.bromano.mobile.perf.tools
 
 import com.bromano.mobile.perf.utils.sha256
 import org.junit.jupiter.api.Test

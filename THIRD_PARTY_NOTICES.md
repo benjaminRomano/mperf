@@ -1,7 +1,7 @@
 # Third-Party Notices
 
-The startup page-fault report bundles the following third-party components so generated HTML reports and Android trace
-processing work without fetching scripts at report-view time.
+Generated startup page-fault reports bundle Plotly for offline viewing. Android profiling tools are downloaded
+separately on first use and verified against pinned SHA-256 checksums.
 
 ## Plotly.js
 
@@ -11,11 +11,14 @@ Copyright 2012–2026 Plotly, Inc.
 
 Licensed under the MIT License. The minified distribution retains its upstream license header.
 
-## Perfetto Trace Processor bootstrap
+## Perfetto and Simpleperf
 
-`src/main/resources/faults-engine/android/trace_processor`
+Perfetto Trace Processor and tracebox: https://github.com/google/perfetto
+
+Simpleperf binaries and conversion scripts: https://android.googlesource.com/platform/prebuilts/simpleperf/ and
+https://android.googlesource.com/platform/system/extras/+/main/simpleperf/
 
 Copyright The Android Open Source Project.
 
-Licensed under the Apache License, Version 2.0. The bootstrap script retains its upstream license header and downloads
-the matching Trace Processor binary on first use.
+Licensed under the Apache License, Version 2.0. Versions, source URLs, and integrity checks are maintained in
+`src/main/kotlin/com/bromano/mobile/perf/tools/`. These tools are not bundled in the CLI JAR.
