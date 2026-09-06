@@ -33,7 +33,7 @@ class AndroidFaultsCommandTest {
             command.test(
                 "--device emulator-5554 --out $output --reboot-before-collect " +
                     "--max-resident-pages 0 --settle-ms 900 --native-stacks --dwarf-stacks " +
-                    "--reclaim-mapped-apks --overwrite --no-open",
+                    "--dwarf-kernel-pages 8192 --dwarf-user-buffer-mb 512 --reclaim-mapped-apks --overwrite --no-open",
             )
 
         assertEquals(0, result.statusCode, result.output)
@@ -46,6 +46,8 @@ class AndroidFaultsCommandTest {
         assertTrue(request.pullArtifacts)
         assertTrue(request.nativeStacks)
         assertTrue(request.dwarfStacks)
+        assertEquals(8192, request.dwarfKernelPages)
+        assertEquals(512, request.dwarfUserBufferMb)
         assertTrue(request.reclaimMappedApks)
         assertTrue(request.overwrite)
         assertEquals("speed-profile", request.compilation)

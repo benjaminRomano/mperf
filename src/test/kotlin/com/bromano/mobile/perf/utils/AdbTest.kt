@@ -20,6 +20,7 @@ class AdbTest {
     @BeforeEach
     fun setup() {
         shell = mock()
+        whenever(shell.runArguments(any(), any(), any())).thenReturn(CommandResult(1, "", "not root"))
         adb = Adb(device = "test-device", shell = shell)
     }
 
@@ -62,20 +63,17 @@ class AdbTest {
     }
 
     @Test
-    fun `isRootable returns true when su exists`() {
-        doReturn("/system/bin/su").whenever(shell).runCommand(
-            command = eq("adb -s test-device shell which su"),
-            ignoreErrors = any(),
+    fun `isRootable returns true when su provides root`() {
+        doReturn(CommandResult(0, "uid=0(root) gid=0(root)", "")).whenever(shell).runArguments(
+            command = eq(listOf("adb", "-s", "test-device", "shell", "su 0 sh -c 'id'")),
+            check = any(),
+            timeout = any(),
         )
         assertTrue(adb.isRootable())
     }
 
     @Test
-    fun `isRootable returns false when su does not exist`() {
-        doReturn("").whenever(shell).runCommand(
-            command = eq("adb -s test-device shell which su"),
-            ignoreErrors = any(),
-        )
+    fun `isRootable returns false when no root command succeeds`() {
         assertFalse(adb.isRootable())
     }
 

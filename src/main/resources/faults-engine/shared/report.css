@@ -51,6 +51,19 @@ h2 {
 #cacheStatus {
   font-weight: 500;
 }
+.io-availability {
+  margin: 0;
+  padding: 6px 12px;
+  max-height: 25%;
+  overflow: auto;
+  flex-shrink: 0;
+}
+#panel-health td:first-child {
+  min-width: 140px;
+}
+#panel-health td {
+  overflow-wrap: anywhere;
+}
 .toolbar,
 .view-toolbar {
   display: flex;
@@ -128,6 +141,15 @@ input[type="number"] {
   flex: 1;
   min-height: 0;
   overflow: hidden;
+}
+.health-only .workspace {
+  grid-template-columns: minmax(0, 1fr);
+}
+.health-only .source-panel,
+.health-only .selection-bar,
+.health-only .toolbar > label:not(:first-child),
+.health-only #reset {
+  display: none;
 }
 .source-panel {
   display: flex;

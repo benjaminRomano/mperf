@@ -150,6 +150,8 @@ tasks {
             "src/test/javascript/report_stacks.test.cjs",
             "src/test/javascript/report_perfetto.test.cjs",
             "src/test/javascript/release_ci.test.cjs",
+            "src/test/javascript/report_context.test.cjs",
+            "src/test/javascript/report_health.test.cjs",
         )
     }
 

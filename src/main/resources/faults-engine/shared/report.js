@@ -114,6 +114,8 @@ const stackReader = FaultStacks.create({
   },
 });
 function setTab(tab) {
+  if (run.healthOnly) tab = "health";
+  if ((tab === "io" || tab === "health") && !run[tab]) tab = "stacks";
   if (run.stacksOnly && tab === "pages") tab = "stacks";
   activeTab = tab;
   for (const button of document.querySelectorAll("[data-tab]"))
@@ -125,15 +127,70 @@ function setTab(tab) {
     tab === "flame" ? "tab-flame" : "tab-stacks",
   );
   $("panel-sites").hidden = tab !== "sites";
+  $("panel-health").hidden = tab !== "health";
+  $("panel-io").hidden = tab !== "io";
+  $("selectedSource").hidden = tab === "io" || tab === "health";
+  $("detailDock").hidden = tab === "io" || tab === "health";
   if (tab === "pages") drawAccess();
   if (tab === "stacks" || tab === "flame") drawStacks();
   if (tab === "sites") drawSites();
+  if (tab === "health") drawHealth();
+  if (tab === "io") drawIo();
+}
+function drawHealth() {
+  $("healthProvenance").textContent = JSON.stringify(run.provenance, null, 2);
+  $("healthRows").innerHTML = (run.health || [])
+    .map(
+      (r) =>
+        "<tr>" +
+        [r.name, r.state, r.value, r.action]
+          .map((v) => "<td>" + escapeHtml(v) + "</td>")
+          .join("") +
+        "</tr>",
+    )
+    .join("");
+}
+function drawIo() {
+  const io = run.io || {};
+  $("ioSummary").textContent =
+    "Event availability · " + (io.status || "not collected");
+  $("ioAvailability").innerHTML =
+    "<ul>" +
+    (io.availability || [])
+      .map((r) => "<li>" + escapeHtml(r.event + ": " + r.status) + "</li>")
+      .concat((io.warnings || []).map((w) => "<li>" + escapeHtml(w) + "</li>"))
+      .join("") +
+    "</ul>";
+  const l = layout("", Math.max(180, $("ioPlot").parentElement.clientHeight));
+  l.margin.l = 150;
+  l.xaxis.range = [0, io.duration || 1];
+  l.yaxis = {
+    type: "category",
+    categoryorder: "array",
+    categoryarray: FaultContext.lanes,
+    autorange: "reversed",
+    gridcolor: "#e5e8ec",
+  };
+  Plotly.react("ioPlot", FaultContext.traces(run, plotType), l, config);
 }
 function changeRun() {
   run = REPORT.runs[Number($("run").value)];
+  document.body.classList.toggle("health-only", Boolean(run.healthOnly));
   perfetto.setRun(run);
+  $("tab-health").hidden = !run.health;
+  $("tab-io").hidden = Boolean(run.healthOnly) || !run.io;
+  for (const tab of ["pages", "stacks", "flame", "sites"])
+    $("tab-" + tab).hidden = Boolean(run.healthOnly);
   range = null;
   clearDetail();
+  if (run.healthOnly) {
+    events = [];
+    sourceEvents = [];
+    $("summary").textContent = run.subtitle;
+    $("cacheStatus").textContent = run.cache;
+    setTab("health");
+    return;
+  }
   run.events.forEach((e, i) => (e.order = i + 1));
   for (const id of ["source", "thread", "section"]) $(id).replaceChildren();
   option($("source"), "", "All sources");
@@ -187,6 +244,10 @@ function changeRun() {
   setTab(activeTab);
 }
 function update() {
+  if (run.healthOnly) {
+    setTab("health");
+    return;
+  }
   const kind = $("kind").value,
     source = $("source").value,
     thread = $("thread").value;
@@ -768,8 +829,20 @@ $("resetZoom").addEventListener("click", () =>
     "yaxis.autorange": true,
   }),
 );
+$("useIoRange").addEventListener("click", () => {
+  const values = $("ioPlot")._fullLayout?.xaxis.range;
+  if (values?.length === 2 && values.every(Number.isFinite)) {
+    range = { field: "time", lo: Math.min(...values), hi: Math.max(...values) };
+    activeTab = "pages";
+    update();
+  }
+});
+$("resetIoZoom").addEventListener("click", () =>
+  Plotly.relayout("ioPlot", { "xaxis.range": [0, run.io.duration] }),
+);
 window.addEventListener("resize", () => {
   drawStacks();
+  if (activeTab === "io") drawIo();
 });
 let resizeFrame;
 new ResizeObserver(() => {

@@ -64,6 +64,44 @@ internal fun stableAndroidSourceLabel(
 internal class AndroidFaultReport(
     private val engineRoot: Path,
 ) {
+    /** Failure diagnostics never load or expose possibly partial processed fault tables. */
+    fun buildHealth(
+        capture: Path,
+        output: Path,
+        label: String,
+        failure: Throwable,
+    ) {
+        val metadata = runCatching { Json.readMap(capture.resolve("capture_metadata.json")) }.getOrDefault(mutableMapOf())
+        val failureRow =
+            mapOf(
+                "name" to "Capture / processing failure",
+                "state" to "warning",
+                "value" to (failure.message ?: failure.javaClass.simpleName),
+                "action" to "Capture did not produce a validated report. Raw evidence is preserved in the capture directory.",
+            )
+        val run =
+            mapOf(
+                "label" to label,
+                "subtitle" to "Capture diagnostics only · no validated fault analysis",
+                "healthOnly" to true,
+                "events" to emptyList<Any>(),
+                "sources" to emptyMap<String, Any>(),
+                "cache" to "See the pre-launch cache evidence below; no cold-cache claim is inferred from capture failure.",
+                "health" to listOf(failureRow) +
+                    AndroidCaptureContext.health(
+                        capture,
+                        metadata,
+                        emptyList(),
+                        AndroidDwarf.Matches(),
+                        validatedEvents = false,
+                    ),
+                "notes" to listOf("This is a failure diagnostic, not a validated fault report."),
+                "provenance" to metadata,
+                "perfettoTrace" to perfettoTraceReference(capture, output),
+            )
+        SharedFaultReport(engineRoot).write(listOf(run), output, "Capture health · $label")
+    }
+
     fun build(
         capture: Path,
         output: Path,
@@ -100,6 +138,7 @@ internal class AndroidFaultReport(
                     "capture_status",
                     "processing_status",
                     "simpleperf_status",
+                    "simpleperf_buffer_config",
                     "reclaim_mapped_apks",
                 ).filter { a[it] == null || b[it] == null || a[it] != b[it] } + compilationDifferences(a, b)
             require(changed.isEmpty() || allowIncomparable) { "Comparison settings differ: ${changed.joinToString()}" }
@@ -299,6 +338,8 @@ internal class AndroidFaultReport(
             "events" to events,
             "sources" to sources,
             "cache" to cacheText,
+            "health" to AndroidCaptureContext.health(path, metadata, events, dwarf),
+            "io" to AndroidCaptureContext.io(path, metadata),
             "notes" to notes,
             "provenance" to metadata,
         )

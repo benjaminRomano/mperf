@@ -4,6 +4,8 @@ import com.bromano.mobile.perf.faults.AndroidFaultCollector
 import com.bromano.mobile.perf.faults.AndroidFaultProcessor
 import com.bromano.mobile.perf.faults.AndroidFaultReport
 import com.bromano.mobile.perf.faults.FaultEngine
+import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
 
 data class AndroidFaultRequest(
@@ -26,6 +28,8 @@ data class AndroidFaultRequest(
     val reclaimMappedApks: Boolean = false,
     val compilation: String = "speed-profile",
     val ioEvidence: Boolean = false,
+    val dwarfKernelPages: Int = 4096,
+    val dwarfUserBufferMb: Int = 256,
 )
 
 fun interface AndroidFaultWorkflow {
@@ -37,10 +41,36 @@ internal class DefaultAndroidFaultWorkflow(
 ) : AndroidFaultWorkflow {
     override fun run(request: AndroidFaultRequest): Path {
         val engineRoot = engine.materialize()
-        if (!request.skipCollect) {
-            AndroidFaultCollector(engineRoot).collect(request)
+        val metadata = request.output.resolve("capture_metadata.json")
+        val marker = request.output.resolve(".android-fault-visualizer-capture")
+
+        fun snapshot(path: Path): List<Byte>? = runCatching { Files.readAllBytes(path).toList() }.getOrNull()
+        val before = snapshot(metadata) to snapshot(marker)
+        var collected = request.skipCollect
+        try {
+            if (!request.skipCollect) {
+                AndroidFaultCollector(engineRoot).collect(request)
+                collected = true
+            }
+            AndroidFaultProcessor().process(request.output)
+        } catch (failure: Throwable) {
+            val after = snapshot(metadata) to snapshot(marker)
+            if (Files.isDirectory(request.output, LinkOption.NOFOLLOW_LINKS) &&
+                (after.first != null || after.second != null) &&
+                (collected || before != after)
+            ) {
+                runCatching {
+                    AndroidFaultReport(engineRoot).buildHealth(
+                        request.output,
+                        request.output.resolve("capture-health.html"),
+                        request.label,
+                        failure,
+                    )
+                    System.err.println("Capture diagnostics: ${request.output.resolve("capture-health.html").toAbsolutePath()}")
+                }.exceptionOrNull()?.let(failure::addSuppressed)
+            }
+            throw failure
         }
-        AndroidFaultProcessor().process(request.output)
         val report = request.output.resolve("report.html")
         AndroidFaultReport(engineRoot).build(
             capture = request.output,

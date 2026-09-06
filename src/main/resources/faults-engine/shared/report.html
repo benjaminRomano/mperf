@@ -45,7 +45,12 @@
           placeholder="File, DEX, class, or stack frame"
       /></label>
       <button id="reset">Reset filters</button>
-      <button id="openPerfetto" title="Open this run's startup trace in Perfetto; trace data stays in your browser">Open in Perfetto</button>
+      <button
+        id="openPerfetto"
+        title="Open this run's startup trace in Perfetto; trace data stays in your browser"
+      >
+        Open in Perfetto
+      </button>
       <a id="downloadTrace" download hidden>Trace file</a>
     </div>
     <div class="selection-bar">
@@ -81,6 +86,24 @@
       </aside>
       <div class="analysis-panel">
         <nav class="tabs" role="tablist" aria-label="Analysis view">
+          <button
+            role="tab"
+            id="tab-health"
+            aria-controls="panel-health"
+            data-tab="health"
+            aria-selected="false"
+          >
+            Capture health
+          </button>
+          <button
+            role="tab"
+            id="tab-io"
+            aria-controls="panel-io"
+            data-tab="io"
+            aria-selected="false"
+          >
+            I/O context
+          </button>
           <button
             role="tab"
             id="tab-pages"
@@ -119,6 +142,56 @@
           </button>
         </nav>
         <p id="selectedSource"></p>
+        <section
+          id="panel-health"
+          role="tabpanel"
+          aria-labelledby="tab-health"
+          hidden
+        >
+          <p class="view-note">
+            Whole-capture diagnostics. Missing evidence is not a zero
+            measurement.
+          </p>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Check</th>
+                  <th>Status</th>
+                  <th>Evidence</th>
+                  <th>Interpretation / next step</th>
+                </tr>
+              </thead>
+              <tbody id="healthRows"></tbody>
+            </table>
+          </div>
+          <details class="measurement">
+            <summary>Capture metadata</summary>
+            <pre id="healthProvenance"></pre>
+          </details>
+        </section>
+        <section id="panel-io" role="tabpanel" aria-labelledby="tab-io" hidden>
+          <p class="view-note">
+            Whole startup, independent of fault filters. File-backed faults,
+            app/worker cache fills, ART advice, app blocking, and system-wide
+            guest block activity share the time axis—not a proven causal link.
+          </p>
+          <div class="view-toolbar">
+            <button id="useIoRange">Use I/O zoom as fault time filter</button
+            ><button id="resetIoZoom">Reset I/O zoom</button>
+          </div>
+          <div class="plot-scroll"><div id="ioPlot" class="plot"></div></div>
+          <details class="io-availability">
+            <summary id="ioSummary">Event availability</summary>
+            <div id="ioAvailability"></div>
+          </details>
+          <p class="view-note">
+            Block events are not paired into requests or attributed to files.
+            D-state blocking is not necessarily disk I/O; advice and cache fills
+            do not measure storage latency. Empty lanes can mean unavailable
+            events.
+          </p>
+        </section>
         <section id="panel-pages" role="tabpanel" aria-labelledby="tab-pages">
           <div class="view-toolbar">
             <label
@@ -235,6 +308,9 @@
     </script>
     <script>
       __MODEL__;
+    </script>
+    <script>
+      __CONTEXT__;
     </script>
     <script>
       __STACKS__;

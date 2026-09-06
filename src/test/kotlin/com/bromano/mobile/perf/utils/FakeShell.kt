@@ -1,8 +1,21 @@
 package com.bromano.mobile.perf.utils
 
+import java.time.Duration
 import java.util.concurrent.TimeUnit
 
 open class FakeShell : Shell {
+    val runArgumentsCalls = mutableListOf<List<String>>()
+    var runArgumentsHandler: ((List<String>, Boolean, Duration) -> CommandResult)? = null
+
+    override fun runArguments(
+        command: List<String>,
+        check: Boolean,
+        timeout: Duration,
+    ): CommandResult {
+        runArgumentsCalls += command
+        return runArgumentsHandler?.invoke(command, check, timeout) ?: CommandResult(0, "", "")
+    }
+
     val runCommandCalls = mutableListOf<String>()
     val runCommandWithOptionsCalls = mutableListOf<RunCommandCall>()
     var runCommandResponses = mutableMapOf<String, String>()

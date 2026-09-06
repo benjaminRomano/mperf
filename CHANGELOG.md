@@ -6,7 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Capture-health diagnostics and an aligned Android I/O context view with explicit stream availability and no inferred request pairing.
+- Configurable DWARF kernel/userspace buffers, loss-specific guidance, and retained rejected Simpleperf recordings.
+- Weekly Android compatibility captures and an opt-in dedicated rooted-device workflow; CI failures retain fixture evidence.
+
 ### Changed
+
+- Shared structured ADB/root transport across profiling and fault capture; reject mismatched kernel/userspace page sizes.
 
 - Centralized Android tool provisioning, aligned tracebox and host Trace Processor to Perfetto v58.2, and reused
   the current pinned Simpleperf prebuilt for CPU and DWARF fault capture.

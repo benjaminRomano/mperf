@@ -1,11 +1,11 @@
-package com.bromano.mobile.perf.faults
+package com.bromano.mobile.perf.utils
 
 import java.nio.file.Path
 import java.time.Duration
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
-internal data class CommandResult(
+data class CommandResult(
     val exitCode: Int,
     val stdout: String,
     val stderr: String,

@@ -47,6 +47,16 @@ class AndroidFaultsCommand(
         "--reboot-before-collect",
         help = "Reboot the target before cache eviction and collection",
     ).flag(default = false)
+    private val dwarfKernelPages by option("--dwarf-kernel-pages", help = "Simpleperf ring-buffer pages per CPU (power of two)")
+        .int()
+        .default(4096)
+        .validate { require(it in 64..16384 && it and (it - 1) == 0) { "must be a power of two between 64 and 16384" } }
+    private val dwarfUserBufferMb by option(
+        "--dwarf-user-buffer-mb",
+        help = "Simpleperf userspace buffer in MiB; larger buffers consume target RAM",
+    ).int()
+        .default(256)
+        .validate { require(it in 16..2048) { "must be between 16 and 2048" } }
     private val nativeStacks by option(
         "--native-stacks",
         help = "Capture exact native/ART frame-pointer callchains with each fault",
@@ -113,6 +123,8 @@ class AndroidFaultsCommand(
                     comparisonLabel = compareLabel,
                     allowIncomparable = allowIncomparable,
                     dwarfStacks = dwarfStacks,
+                    dwarfKernelPages = dwarfKernelPages,
+                    dwarfUserBufferMb = dwarfUserBufferMb,
                     reclaimMappedApks = reclaimMappedApks,
                     ioEvidence = ioEvidence,
                     compilation = compilation,

@@ -9,6 +9,7 @@ import com.google.gson.JsonParser
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Timeout
+import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 import kotlin.io.path.createDirectories
@@ -37,7 +38,13 @@ class IosProfilerIntegrationTest {
         assumeTrue(simulator != null, "No available iOS simulator runtime found")
         val deviceId = requireNotNull(simulator)
         val wasBooted = isBooted(deviceId)
-        val workspace = createTempDirectory("mperf-ios-integration")
+        val artifactDirectory = IntegrationArtifacts.directory("ios")
+        val workspace =
+            if (artifactDirectory == null) {
+                createTempDirectory("mperf-ios-integration")
+            } else {
+                Files.createTempDirectory(artifactDirectory, "fixture-")
+            }
         val app = workspace.resolve("MperfFixture.app")
         val bundleIdentifier = "com.bromano.mperf.integration.fixture"
 
@@ -92,7 +99,9 @@ class IosProfilerIntegrationTest {
             if (!wasBooted) {
                 shell.runCommand("xcrun simctl shutdown ${quote(deviceId)}", ignoreErrors = true)
             }
-            workspace.toFile().deleteRecursively()
+            if (artifactDirectory == null) {
+                workspace.toFile().deleteRecursively()
+            }
         }
     }
 

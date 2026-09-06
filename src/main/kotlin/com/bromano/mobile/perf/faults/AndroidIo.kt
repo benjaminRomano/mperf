@@ -1,5 +1,6 @@
 package com.bromano.mobile.perf.faults
 
+import com.bromano.mobile.perf.utils.CommandResult
 import com.bromano.mobile.perf.utils.sha256
 import java.nio.file.Files
 import java.nio.file.Path

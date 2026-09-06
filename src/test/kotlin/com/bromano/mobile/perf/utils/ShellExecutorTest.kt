@@ -28,6 +28,32 @@ class ShellExecutorTest {
     private val shell = ShellExecutor()
 
     @Test
+    fun `runArguments keeps literal arguments and untrimmed streams`() {
+        val value = "a b'c; echo unsafe"
+        val result = shell.runArguments(listOf("sh", "-c", "printf '%s\\n' \"${'$'}1\"; printf 'warning\\n' >&2", "sh", value))
+
+        assertEquals(CommandResult(0, "$value\n", "warning\n"), result)
+    }
+
+    @Test
+    fun `runArguments retains failure status or throws when checked`() {
+        val command = listOf("sh", "-c", "printf partial; printf failure >&2; exit 7")
+        assertEquals(CommandResult(7, "partial", "failure"), shell.runArguments(command, check = false))
+        val error = assertFailsWith<CommandFailure> { shell.runArguments(command) }
+        assertEquals(7, error.result.exitCode)
+        assertEquals("failure", error.result.stderr)
+    }
+
+    @Test
+    fun `runArguments enforces a bounded timeout`() {
+        assertTimeoutPreemptively(Duration.ofSeconds(5)) {
+            assertFailsWith<IllegalStateException> {
+                shell.runArguments(listOf("sleep", "10"), timeout = Duration.ofMillis(50))
+            }
+        }
+    }
+
+    @Test
     fun `shell quote preserves one literal argument`() {
         val value = "path with spaces and 'quotes'; echo unsafe"
 

@@ -1,6 +1,7 @@
 package com.bromano.mobile.perf.faults
 
 import com.bromano.mobile.perf.tools.NativeTraceProcessor
+import com.bromano.mobile.perf.utils.Processes
 import com.fasterxml.jackson.core.type.TypeReference
 import java.nio.file.Files
 import java.nio.file.Path

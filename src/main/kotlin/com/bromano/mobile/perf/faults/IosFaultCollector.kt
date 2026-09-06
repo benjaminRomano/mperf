@@ -1,6 +1,7 @@
 package com.bromano.mobile.perf.faults
 
 import com.bromano.mobile.perf.commands.faults.IosFaultRequest
+import com.bromano.mobile.perf.utils.Processes
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption

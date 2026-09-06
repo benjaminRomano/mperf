@@ -1,6 +1,7 @@
 package com.bromano.mobile.perf.utils
 
 import java.io.InputStream
+import java.time.Duration
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
@@ -21,6 +22,13 @@ class ShellCommandException(
  * TODO: This abstraction is dubious.
  */
 interface Shell {
+    /** Run an argument vector without host-shell interpretation, retaining status and both streams. */
+    fun runArguments(
+        command: List<String>,
+        check: Boolean = true,
+        timeout: Duration = Duration.ofSeconds(30),
+    ): CommandResult
+
     /**
      * Run command with output returned as a string
      *
@@ -99,6 +107,12 @@ interface Shell {
 }
 
 open class ShellExecutor : Shell {
+    override fun runArguments(
+        command: List<String>,
+        check: Boolean,
+        timeout: Duration,
+    ): CommandResult = Processes.run(command, check = check, timeout = timeout)
+
     private fun systemShell(): String = System.getenv("SHELL")?.takeIf { it.isNotBlank() } ?: "/bin/bash"
 
     override fun newProcessBuilder(command: String): ProcessBuilder = ProcessBuilder(listOf(systemShell(), "-c", command))

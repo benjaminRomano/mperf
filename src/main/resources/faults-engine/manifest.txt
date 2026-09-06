@@ -13,4 +13,5 @@ shared/report.css
 shared/report.js
 shared/perfetto.js
 shared/model.js
+shared/context.js
 shared/stacks.js
