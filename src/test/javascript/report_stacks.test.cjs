@@ -279,3 +279,72 @@ test("flame click inspects the actual first-touch sample and double click focuse
   renderer.render(state);
   assert.deepEqual(focuses.at(-1), ["", 2]);
 });
+
+test("gesture bursts zoom quickly around the pointer and coalesce paints with cancellation", () => {
+  const raf = global.requestAnimationFrame,
+    cancel = global.cancelAnimationFrame;
+  const queued = new Map();
+  let sequence = 0;
+  global.requestAnimationFrame = (fn) => {
+    queued.set(++sequence, fn);
+    return sequence;
+  };
+  global.cancelAnimationFrame = (id) => queued.delete(id);
+  const flush = () => {
+    const callbacks = [...queued.values()];
+    queued.clear();
+    callbacks.forEach((fn) => fn());
+  };
+  const surface = fakeSurface();
+  const renderer = create(surface);
+  try {
+    const events = Array.from({ length: 10000 }, (_, i) =>
+      event(i, [frame("root")]),
+    );
+    renderer.render({ events, mode: "chronological" });
+    const wheel = (deltaY, deltaMode = 0) =>
+      surface.handlers.get("wheel")({
+        ctrlKey: true,
+        deltaY,
+        deltaMode,
+        clientX: 400,
+        preventDefault() {},
+      });
+    for (let i = 0; i < 4; i++) wheel(-100);
+    assert.equal(queued.size, 1);
+    assert.equal(
+      surface.canvas.dataset.viewportSpan,
+      "1",
+      "paint should wait for animation frame",
+    );
+    flush();
+    const span = +surface.canvas.dataset.viewportSpan;
+    assert.ok(
+      span * events.length < 100,
+      "four gestures should reach fewer than 100 of 10,000 faults",
+    );
+    assert.ok(
+      Math.abs(+surface.canvas.dataset.viewportLeft + span / 2 - 0.5) < 1e-9,
+    );
+    for (let i = 0; i < 4; i++) wheel(100);
+    flush();
+    assert.ok(Math.abs(+surface.canvas.dataset.viewportSpan - 1) < 1e-9);
+    wheel(-1, 1);
+    flush();
+    assert.ok(
+      Math.abs(+surface.canvas.dataset.viewportSpan - Math.exp(-16 * 0.012)) <
+        1e-9,
+    );
+    wheel(-100);
+    renderer.render({ events: events.slice(0, 3), mode: "chronological" });
+    assert.equal(queued.size, 0, "new filters cancel obsolete paints");
+    assert.equal(surface.canvas.dataset.viewportSpan, "1");
+    wheel(-100);
+    renderer.destroy();
+    assert.equal(queued.size, 0, "destroy cancels pending paints");
+  } finally {
+    renderer.destroy();
+    global.requestAnimationFrame = raf;
+    global.cancelAnimationFrame = cancel;
+  }
+});

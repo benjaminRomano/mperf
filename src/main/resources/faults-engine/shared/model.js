@@ -67,5 +67,20 @@ globalThis.FaultModel = (() => {
       height: Math.round(Math.max(min, Math.min(max, requested))),
     };
   }
-  return { page, deltas, median, regions, matchesRegion, detailSize };
+  function sourceVisibility(events, fileBackedOnly) {
+    const visible = [],
+      hidden = [];
+    for (const event of events)
+      (fileBackedOnly && !event.fileBacked ? hidden : visible).push(event);
+    return { visible, hidden };
+  }
+  return {
+    page,
+    deltas,
+    median,
+    regions,
+    matchesRegion,
+    detailSize,
+    sourceVisibility,
+  };
 })();
