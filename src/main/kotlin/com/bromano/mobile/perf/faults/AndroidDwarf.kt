@@ -1,5 +1,6 @@
 package com.bromano.mobile.perf.faults
 
+import com.bromano.mobile.perf.tools.SimpleperfTools
 import com.bromano.mobile.perf.utils.sha256
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -10,7 +11,7 @@ import java.time.Duration
 internal object AndroidDwarf {
     private const val REMOTE = "/data/local/tmp/android-fault-visualizer/dwarf.data"
     const val COMMAND =
-        "simpleperf record -a -c 1 -m 1024 -e major-faults:u --call-graph dwarf --post-unwind=yes " +
+        "${SimpleperfTools.DEVICE_PATH} record -a -c 1 -m 1024 -e major-faults:u --call-graph dwarf --post-unwind=yes " +
             "--no-callchain-joiner --no-cut-samples --clockid boottime --no-dump-kernel-symbols " +
             "--start_profiling_fd 1 --duration 60 -o $REMOTE"
 
@@ -119,7 +120,7 @@ internal object AndroidDwarf {
         if (pid != null) {
             val stacks =
                 adb.shell(
-                    "simpleperf report-sample -i $REMOTE --show-callchain --remove-gaps 0 --include-pid $pid",
+                    "${SimpleperfTools.DEVICE_PATH} report-sample -i $REMOTE --show-callchain --remove-gaps 0 --include-pid $pid",
                     timeout = Duration.ofMinutes(2),
                 )
             Files.writeString(output.resolve("simpleperf-stacks.txt"), stacks.stdout)

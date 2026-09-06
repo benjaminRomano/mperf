@@ -1,6 +1,9 @@
 package com.bromano.mobile.perf.faults
 
 import com.bromano.mobile.perf.commands.faults.AndroidFaultRequest
+import com.bromano.mobile.perf.tools.SimpleperfTools
+import com.bromano.mobile.perf.utils.Adb
+import com.bromano.mobile.perf.utils.ShellExecutor
 import com.bromano.mobile.perf.utils.sha256
 import java.nio.file.Files
 import java.nio.file.Path
@@ -27,6 +30,11 @@ internal class AndroidFaultCollector(
         adb.ensureRoot()
         val sdk = adb.property("ro.build.version.sdk").toInt()
         val abi = adb.property("ro.product.cpu.abi")
+        // Prepare the same pinned recorder used by CPU profiling before any cache eviction.
+        if (request.dwarfStacks) {
+            val shell = ShellExecutor()
+            SimpleperfTools(shell).sideload(Adb(adb.serial, shell))
+        }
         val pageSize =
             adb
                 .shell("getconf PAGESIZE")

@@ -24,5 +24,5 @@ android {
 }
 
 dependencies {
-    implementation("androidx.tracing:tracing:2.0.0-alpha09")
+    implementation("androidx.tracing:tracing:2.0.0-beta01")
 }

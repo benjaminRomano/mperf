@@ -180,16 +180,16 @@ class SimpleperfProfilerTest {
         ).thenReturn("usage: su [WHO [COMMAND...]]")
         // ABI for sideload map
         whenever(shell.runCommand(argThat { contains("adb") && contains("getprop ro.product.cpu.abi") }, any())).thenReturn("arm64-v8a")
-        // Sideload check: simpleperf already present and md5 matches
+        // Sideload check: simpleperf already present and sha256 matches
         whenever(shell.runCommand(argThat { contains("adb") && contains("ls /data/local/tmp") }, any())).thenReturn("simpleperf")
         whenever(
             shell.runCommand(
                 argThat {
-                    contains("adb") && contains("md5sum /data/local/tmp/simpleperf")
+                    contains("adb") && contains("sha256sum /data/local/tmp/simpleperf")
                 },
                 any(),
             ),
-        ).thenReturn("2dca6449abf98f651135f544ce46a1cd  /data/local/tmp/simpleperf")
+        ).thenReturn("bf6d50d8ece60f5bc9c21aa3559993a99f868c0501040aeab3af0b911cb6a200  /data/local/tmp/simpleperf")
 
         // pidof once, then blank to indicate shutdown
         whenever(

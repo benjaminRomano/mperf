@@ -6,18 +6,19 @@ on:
       - "v*"
 
 permissions:
+  actions: read
   contents: write
   id-token: write
   attestations: write
 
 jobs:
   build-and-release:
-    runs-on: macos-26
+    runs-on: ubuntu-latest
     timeout-minutes: 45
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -34,27 +35,18 @@ jobs:
             exit 1
           fi
 
-      - name: Validate Gradle Wrapper
-        uses: gradle/actions/wrapper-validation@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
-
-      - name: Setup Xcode
-        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
-        with:
-          xcode-version: latest-stable
-
-      - name: Set up JDK 21
-        uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5.5.0
-        with:
-          distribution: temurin
-          java-version: "21"
+      - name: Verify source CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/check-source-ci.mjs "$GITHUB_SHA"
 
       - name: Verify runner tools
         run: |
           node --version
           python3 --version
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+      - name: Set up JVM build
+        uses: ./.github/actions/setup-build
 
       - name: Test install and uninstall scripts
         run: scripts/test-install.sh
@@ -67,23 +59,7 @@ jobs:
           TAG_NO_V="${RELEASE_VERSION#v}"
           echo "Building release version: $TAG_NO_V"
           ./gradlew --no-daemon --stacktrace --warning-mode=all \
-            -PreleaseVersion="$TAG_NO_V" clean build shadowJar generateDocs
-
-      - name: Run iOS integration tests
-        run: |
-          for attempt in 1 2; do
-            if ./gradlew test --no-daemon --stacktrace \
-              -Dmperf.integration.ios.enabled=true \
-              --tests com.bromano.mobile.perf.integration.IosProfilerIntegrationTest \
-              --tests com.bromano.mobile.perf.gecko.InstrumentsConverterTest; then
-              exit 0
-            fi
-            if [ "$attempt" -eq 2 ]; then
-              exit 1
-            fi
-            echo "::warning::Xcode failed the live integration run; resetting Simulators and retrying once"
-            xcrun simctl shutdown all || true
-          done
+            -PreleaseVersion="$TAG_NO_V" clean build shadowJar jmhClasses generateDocs
 
       - name: Verify generated documentation is current
         run: git diff --exit-code -- docs/cli.md
@@ -114,12 +90,12 @@ jobs:
           echo "asset_sum=$OUT_DIR/$BASENAME.sha256" >> "$GITHUB_OUTPUT"
 
       - name: Attest release artifact provenance
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: ${{ steps.prep.outputs.asset_jar }}
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: ${{ github.ref_name }}
           generate_release_notes: true
