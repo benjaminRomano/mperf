@@ -30,6 +30,19 @@ data class AndroidFaultRequest(
     val ioEvidence: Boolean = false,
     val dwarfKernelPages: Int = 4096,
     val dwarfUserBufferMb: Int = 256,
+    val nativeMaxSamples: Int = 2_000_000,
+    val nativeKernelPages: Int = 256,
+    val nativeMaxMappings: Int = 200_000,
+    val nativeMaxCallchainEntries: Int = 16_000_000,
+    val perfettoMode: String = "full",
+    val reportOnly: Boolean = false,
+    val dwarfRecorder: Path? = null,
+    val cohort: Path? = null,
+    val symbolDirectory: Path? = null,
+    val mappingFile: Path? = null,
+    val mappingApkSha256: String? = null,
+    val startupProfile: Path? = null,
+    val baselineProfile: Path? = null,
 )
 
 fun interface AndroidFaultWorkflow {
@@ -46,13 +59,13 @@ internal class DefaultAndroidFaultWorkflow(
 
         fun snapshot(path: Path): List<Byte>? = runCatching { Files.readAllBytes(path).toList() }.getOrNull()
         val before = snapshot(metadata) to snapshot(marker)
-        var collected = request.skipCollect
+        var collected = request.skipCollect || request.reportOnly
         try {
-            if (!request.skipCollect) {
+            if (!request.skipCollect && !request.reportOnly) {
                 AndroidFaultCollector(engineRoot).collect(request)
                 collected = true
             }
-            AndroidFaultProcessor().process(request.output)
+            if (!request.reportOnly) AndroidFaultProcessor().process(request.output)
         } catch (failure: Throwable) {
             val after = snapshot(metadata) to snapshot(marker)
             if (Files.isDirectory(request.output, LinkOption.NOFOLLOW_LINKS) &&
@@ -79,6 +92,14 @@ internal class DefaultAndroidFaultWorkflow(
             comparison = request.comparison,
             comparisonLabel = request.comparisonLabel,
             allowIncomparable = request.allowIncomparable,
+            attribution =
+                com.bromano.mobile.perf.faults.AndroidReportAttribution.Options(
+                    request.symbolDirectory,
+                    request.mappingFile,
+                    request.mappingApkSha256,
+                    request.startupProfile,
+                    request.baselineProfile,
+                ),
         )
         return report
     }

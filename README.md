@@ -520,3 +520,5 @@ Publishing requires `gh` authentication with tag-push access. The workflow uses 
 Find published releases and download artifacts at:
 
 https://github.com/benjaminromano/mperf/releases
+
+For large captures, same-sample managed attribution, report-only symbolication, and repeated control/treatment readouts, see [startup fault experiments](docs/startup-fault-attribution.md).

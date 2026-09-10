@@ -37,6 +37,7 @@
         >Region
         <select id="section"></select
       ></label>
+      <label>Caller DEX<select id="callerDex"><option value="">All callers</option><option value="classes2.dex">Secondary DEX</option><option value="dex3plus">DEX 3+ callers</option><option value="unknown">Unknown caller DEX</option></select></label>
       <label class="search"
         >Find
         <input
@@ -156,6 +157,10 @@
             Whole-capture diagnostics. Missing evidence is not a zero
             measurement.
           </p>
+          <details class="measurement" id="experimentReadout"><summary>Experiment readout · all runs and cohorts</summary>
+            <div id="experimentTable"></div><div id="experimentPlot"></div>
+            <p>Fully drawn latency is unavailable when only the first frame was captured. DEX 3+ is diagnostic page content, not proof of execution. Run plots share the startup time axis.</p>
+          </details>
           <div class="table-scroll">
             <table>
               <thead>

@@ -127,3 +127,21 @@ test("source totals reconcile file-backed majors with excluded JIT and unknown m
   assert.equal(FaultModel.sourceVisibility(subset, true).visible.length, 7);
   assert.equal(FaultModel.sourceVisibility(subset, true).hidden.length, 12);
 });
+
+test("caller DEX filtering never substitutes faulted page DEX", () => {
+  const event = {callerDex: ["classes2.dex"], detail: {dex: "classes4.dex"}};
+  assert.equal(FaultModel.matchesCallerDex(event, "classes2.dex"), true);
+  assert.equal(FaultModel.matchesCallerDex(event, "dex3plus"), false);
+  assert.equal(FaultModel.matchesCallerDex({detail: event.detail}, "unknown"), true);
+});
+
+test("cohort summaries count missing fully drawn markers separately", () => {
+  const runs = [10, null, 30].map((latency, i) => ({label: "run " + i, cohort: "Control", experiment: {
+    fullyDrawnMs: latency, appMajorFaults: 4 + i, dex3Plus: i,
+  }}));
+  const [summary] = FaultModel.experimentCohorts(runs);
+  assert.equal(summary.count, 3);
+  assert.equal(summary.fullyDrawnCount, 2);
+  assert.equal(summary.fullyDrawnMedian, 20);
+  assert.equal(summary.appMajorMedian, 5);
+});

@@ -425,7 +425,9 @@ internal object AndroidBinary {
             .forEach { (remote, frames) ->
                 try {
                     val local = artifacts.getValue(remote)
-                    val segments = elf(Files.readAllBytes(local)).segments
+                    val bytes = Files.readAllBytes(local)
+                    requireNotNull(AndroidElfIdentity.read(bytes)) { "Captured ELF has no verifiable architecture/build ID" }
+                    val segments = elf(bytes).segments
                     val addresses = linkedMapOf<Long, Long>()
                     frames.forEach { row ->
                         val offset = row.getValue("file_offset").toLong()

@@ -43,8 +43,24 @@ internal class AndroidFaultCollector(
         val sdk = adb.property("ro.build.version.sdk").toInt()
         val abi = adb.property("ro.product.cpu.abi")
         // Prepare the same pinned recorder used by CPU profiling before any cache eviction.
+        val dwarfPath = if (request.dwarfRecorder == null) SimpleperfTools.DEVICE_PATH else "$remoteDirectory/simpleperf-address"
+        var dwarfHash: String? = null
         if (request.dwarfStacks) {
-            adb.sideloadSimpleperf()
+            if (request.dwarfRecorder == null) {
+                adb.sideloadSimpleperf()
+            } else {
+                val identity =
+                    requireNotNull(AndroidElfIdentity.read(Files.readAllBytes(request.dwarfRecorder))) {
+                        "Custom Simpleperf must be an ELF with a build ID"
+                    }
+                val expected = mapOf("arm64-v8a" to (183 to 64), "armeabi-v7a" to (40 to 32), "x86_64" to (62 to 64))
+                require(expected[abi] == identity.architecture to identity.bits) { "Custom Simpleperf architecture differs from target" }
+                adb.rootShell("mkdir -p ${quote(remoteDirectory)}")
+                adb.run("push", request.dwarfRecorder.toString(), dwarfPath)
+                adb.rootShell("chmod 755 ${quote(dwarfPath)}")
+                dwarfHash = sha256(request.dwarfRecorder)
+                require(adb.rootShell("sha256sum ${quote(dwarfPath)}").stdout.substringBefore(' ') == dwarfHash)
+            }
         }
         val pageSize =
             adb
@@ -73,9 +89,18 @@ internal class AndroidFaultCollector(
                 "kernel_page_size_verified" to true,
                 "online_cpus_sysfs" to adb.shell("cat /sys/devices/system/cpu/online").stdout.trim(),
                 "collector" to "perf-software-page-fault-events",
-                "collector_version" to 5,
+                "collector_version" to 6,
                 "collector_clock" to "boottime",
                 "capture_native_callchains" to request.nativeStacks,
+                "native_buffer_config" to
+                    mapOf(
+                        "max_samples" to request.nativeMaxSamples,
+                        "kernel_pages_per_cpu_per_event" to request.nativeKernelPages,
+                        "max_mappings" to request.nativeMaxMappings,
+                        "max_callchain_entries" to request.nativeMaxCallchainEntries,
+                    ),
+                "perfetto_mode" to request.perfettoMode,
+                "simpleperf_recorder_sha256" to dwarfHash,
                 "simpleperf_status" to if (request.dwarfStacks) "requested" else "disabled",
                 "simpleperf_buffer_config" to
                     mapOf("kernel_pages_per_cpu" to request.dwarfKernelPages, "user_mb" to request.dwarfUserBufferMb),
@@ -99,8 +124,15 @@ internal class AndroidFaultCollector(
         captureWarnings = warnings(metadata)
         Json.write(request.output.resolve("capture_metadata.json"), metadata)
 
-        val baseTraceConfig = Files.readString(engineRoot.resolve("android/ftrace.config"))
+        val baseTraceConfig = perfettoConfig(Files.readString(engineRoot.resolve("android/ftrace.config")), request.perfettoMode)
+        metadata["trace_config_sha256"] = sha256(baseTraceConfig.toByteArray())
+        if (request.perfettoMode == "lean") {
+            metadata["omitted_evidence"] = listOf("page-cache insertions", "block I/O", "I/O advice", "scheduler states")
+            metadata["io_results"] = mapOf("status" to "omitted (lean Perfetto)")
+        }
         val traceConfig = if (request.ioEvidence) AndroidIo.prepare(adb, request.output, metadata, baseTraceConfig) else baseTraceConfig
+        metadata["trace_config_sha256"] = sha256(traceConfig.toByteArray())
+        Files.writeString(request.output.resolve("perfetto.config"), traceConfig)
         adb.shell("am force-stop ${quote(packageName)}")
         waitStopped(adb, packageName)
         val compilation =
@@ -153,13 +185,13 @@ internal class AndroidFaultCollector(
         var dwarf: AndroidDwarf.Running? = null
         var primaryFailure: Throwable? = null
         try {
-            perfetto = startPerfetto(adb, remoteTrace, traceConfig)
-            collector = startCollector(adb, request.nativeStacks)
+            perfetto = startPerfetto(adb, remoteTrace, traceConfig, request.perfettoMode)
+            collector = startCollector(adb, request)
             metadata["collector_start_ns"] = collector.startNs
             metadata["collector_online_cpus"] = collector.onlineCpus
             if (request.dwarfStacks) {
                 dwarf =
-                    AndroidDwarf.start(adb, AndroidDwarf.Buffers(request.dwarfKernelPages, request.dwarfUserBufferMb))
+                    AndroidDwarf.start(adb, AndroidDwarf.Buffers(request.dwarfKernelPages, request.dwarfUserBufferMb, dwarfPath))
             }
             require(collector.onlineCpus == metadata["online_cpus_sysfs"]) {
                 "CPU topology changed while starting collector: sysfs=${metadata["online_cpus_sysfs"]}, collector=${collector.onlineCpus}"
@@ -219,6 +251,14 @@ internal class AndroidFaultCollector(
             throw error
         } finally {
             var cleanupFailure: Throwable? = null
+            // Signal every recorder before any CSV export, post-unwind, or trace flush is awaited.
+            for (recorder in listOfNotNull(collector?.recorder, perfetto?.recorder, dwarf?.recorder)) {
+                try {
+                    recorder.signalStop()
+                } catch (error: Throwable) {
+                    cleanupFailure?.addSuppressed(error) ?: run { cleanupFailure = error }
+                }
+            }
             collector?.let { running ->
                 try {
                     val terminal = stopCollector(running)
@@ -294,6 +334,7 @@ internal class AndroidFaultCollector(
         adb: Device,
         remoteTrace: String,
         traceConfig: String,
+        mode: String,
     ): Running {
         require(adb.pid("perfetto") == null) { "Another Perfetto command is already running" }
         val recorder =
@@ -313,11 +354,12 @@ internal class AndroidFaultCollector(
                             timeout = Duration.ofSeconds(2),
                         ).stdout
                         .trim()
+                val readinessEvent = if (mode == "lean") "task/task_newtask" else "filemap/mm_filemap_add_to_page_cache"
                 val event =
                     adb
                         .rootShell(
-                            "cat /sys/kernel/tracing/events/filemap/mm_filemap_add_to_page_cache/enable 2>/dev/null || " +
-                                "cat /sys/kernel/debug/tracing/events/filemap/mm_filemap_add_to_page_cache/enable 2>/dev/null",
+                            "cat /sys/kernel/tracing/events/$readinessEvent/enable 2>/dev/null || " +
+                                "cat /sys/kernel/debug/tracing/events/$readinessEvent/enable 2>/dev/null",
                             check = false,
                             timeout = Duration.ofSeconds(2),
                         ).stdout
@@ -338,12 +380,15 @@ internal class AndroidFaultCollector(
 
     private fun startCollector(
         adb: Device,
-        stacks: Boolean,
+        request: AndroidFaultRequest,
     ): CollectorRunning {
         require(adb.pid("page_fault_collector") == null) { "Another fault collector is already running" }
         val command =
             "$remoteCollector --output $remoteFaults --mappings-output $remoteMappings " +
-                (if (stacks) "--callchains-output $remoteCallchains " else "") + "--duration-ms 60000"
+                (if (request.nativeStacks) "--callchains-output $remoteCallchains " else "") +
+                "--kernel-pages ${request.nativeKernelPages} --max-samples ${request.nativeMaxSamples} " +
+                "--max-mappings ${request.nativeMaxMappings} " +
+                "--max-callchain-entries ${request.nativeMaxCallchainEntries} --duration-ms 60000"
         val recorder = AndroidRecorder.start(adb, command)
         try {
             val ready = recorder.await(Regex("READY pid=(\\d+) capture_start_ns=(\\d+) online_cpus=([0-9,-]+)"))
@@ -355,7 +400,25 @@ internal class AndroidFaultCollector(
         }
     }
 
-    private fun stopCollector(running: CollectorRunning): Map<String, Long> = parseCollectorSummary(running.recorder.stop())
+    private fun stopCollector(running: CollectorRunning): Map<String, Long> = parseCollectorSummary(running.recorder.stop(120))
+
+    internal fun perfettoConfig(
+        base: String,
+        mode: String,
+    ): String {
+        require(mode in listOf("full", "lean")) { "Unknown Perfetto mode: $mode" }
+        // Preserve startup evidence instead of silently overwriting it during a long capture.
+        val config = base.replace("fill_policy: RING_BUFFER", "fill_policy: DISCARD")
+        return if (mode == "lean") {
+            config
+                .lineSequence()
+                .filterNot {
+                    "filemap/" in it || "atrace_categories: \"dalvik\"" in it || "atrace_categories: \"res\"" in it
+                }.joinToString("\n")
+        } else {
+            config
+        }
+    }
 
     internal fun parseCollectorSummary(output: String): Map<String, Long> {
         val line =

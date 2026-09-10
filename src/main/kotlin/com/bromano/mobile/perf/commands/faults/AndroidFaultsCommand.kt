@@ -59,6 +59,42 @@ class AndroidFaultsCommand(
     ).int()
         .default(256)
         .validate { require(it in 16..2048) { "must be between 16 and 2048" } }
+    private val nativeKernelPages by option("--native-kernel-pages", help = "Native ring pages per CPU per event (major and minor)")
+        .int()
+        .default(256)
+        .validate { require(it in 64..16384 && it and (it - 1) == 0) { "must be a power of two between 64 and 16384" } }
+    private val nativeMaxSamples by option("--native-max-samples", help = "Native fault sample capacity (system-wide)")
+        .int()
+        .default(2_000_000)
+        .validate { require(it > 0) { "must be positive" } }
+    private val nativeMaxMappings by option("--native-max-mappings", help = "Native mapping record capacity")
+        .int()
+        .default(200_000)
+        .validate { require(it > 0) { "must be positive" } }
+    private val nativeMaxCallchainEntries by option("--native-max-callchain-entries", help = "Native callchain address capacity")
+        .int()
+        .default(16_000_000)
+        .validate { require(it > 0) { "must be positive" } }
+    private val perfettoMode by option("--perfetto-mode", help = "Lean retains startup markers but omits page-cache and I/O evidence")
+        .choice("full", "lean")
+        .default("full")
+    private val reportOnly by option("--report-only", help = "Render existing processed inputs without collection or preprocessing")
+        .flag(default = false)
+    private val cohort by option("--cohort", help = "JSON array of {capture, label, cohort} rows for repeated/control-return comparisons")
+        .path(mustExist = true, canBeDir = false)
+    private val dwarfRecorder by option(
+        "--dwarf-recorder",
+        help = "Custom Android Simpleperf ELF with same-sample PERF_SAMPLE_ADDR support",
+    ).path(mustExist = true, canBeDir = false)
+    private val symbolDirectory by option("--symbol-dir", help = "ELF debug files; only architecture/build-ID matches are used")
+        .path(mustExist = true, canBeFile = false)
+    private val mappingFile by option("--r8-mapping", help = "Exact-build R8 mapping (requires --mapping-apk-sha256)")
+        .path(mustExist = true, canBeDir = false)
+    private val mappingApkSha256 by option("--mapping-apk-sha256", help = "SHA-256 of the APK built with the supplied mapping/profiles")
+    private val startupProfile by option("--startup-profile", help = "Consumed startup profile in original-name text format")
+        .path(mustExist = true, canBeDir = false)
+    private val baselineProfile by option("--baseline-profile", help = "Consumed baseline profile in original-name text format")
+        .path(mustExist = true, canBeDir = false)
     private val nativeStacks by option(
         "--native-stacks",
         help = "Capture exact native/ART frame-pointer callchains with each fault",
@@ -98,7 +134,8 @@ class AndroidFaultsCommand(
 
     override fun run() {
         val finalPackage = packageName ?: config.android?.packageName
-        if (!skipCollect && finalPackage == null) {
+        require(!(perfettoMode == "lean" && ioEvidence)) { "--io-evidence requires --perfetto-mode full" }
+        if (!skipCollect && !reportOnly && finalPackage == null) {
             throw PrintMessage(
                 "Package name must be provided via --package or in config.yml",
                 printError = true,
@@ -109,7 +146,7 @@ class AndroidFaultsCommand(
         val report =
             workflow.run(
                 AndroidFaultRequest(
-                    packageName = finalPackage?.takeUnless { skipCollect },
+                    packageName = finalPackage?.takeUnless { skipCollect || reportOnly },
                     activity = activity,
                     device = device,
                     output = finalOutput,
@@ -130,6 +167,19 @@ class AndroidFaultsCommand(
                     reclaimMappedApks = reclaimMappedApks,
                     ioEvidence = ioEvidence,
                     compilation = compilation,
+                    nativeMaxSamples = nativeMaxSamples,
+                    nativeKernelPages = nativeKernelPages,
+                    nativeMaxMappings = nativeMaxMappings,
+                    nativeMaxCallchainEntries = nativeMaxCallchainEntries,
+                    perfettoMode = perfettoMode,
+                    reportOnly = reportOnly,
+                    dwarfRecorder = dwarfRecorder,
+                    cohort = cohort,
+                    symbolDirectory = symbolDirectory,
+                    mappingFile = mappingFile,
+                    mappingApkSha256 = mappingApkSha256,
+                    startupProfile = startupProfile,
+                    baselineProfile = baselineProfile,
                 ),
             )
         echo("Android fault report: $report")

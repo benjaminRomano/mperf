@@ -74,7 +74,30 @@ globalThis.FaultModel = (() => {
       (fileBackedOnly && !event.fileBacked ? hidden : visible).push(event);
     return { visible, hidden };
   }
+  function matchesCallerDex(event, value) {
+    const dex = event.callerDex || [];
+    if (!value) return true;
+    if (value === "unknown") return !dex.length;
+    if (value === "dex3plus") return dex.some((name) => /^classes(?:[3-9]|[1-9][0-9]+)\.dex$/.test(name));
+    return dex.includes(value);
+  }
+  function experimentCohorts(runs) {
+    const groups = new Map();
+    for (const run of runs.filter((r) => r.experiment && !r.stacksOnly)) {
+      const key = run.cohort || run.label;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(run.experiment);
+    }
+    return [...groups].map(([cohort, rows]) => ({cohort, count: rows.length,
+      fullyDrawnCount: rows.filter((r) => Number.isFinite(r.fullyDrawnMs)).length,
+      fullyDrawnMedian: median(rows.map((r) => r.fullyDrawnMs).filter(Number.isFinite)),
+      appMajorMedian: median(rows.map((r) => r.appMajorFaults)),
+      dex3PlusMedian: median(rows.map((r) => r.dex3Plus)),
+    }));
+  }
   return {
+    matchesCallerDex,
+    experimentCohorts,
     page,
     deltas,
     median,

@@ -42,6 +42,19 @@
 | --reboot-before-collect |  | Reboot the target before cache eviction and collection |
 | --dwarf-kernel-pages | int | Simpleperf ring-buffer pages per CPU (power of two) |
 | --dwarf-user-buffer-mb | int | Simpleperf userspace buffer in MiB; larger buffers consume target RAM |
+| --native-kernel-pages | int | Native ring pages per CPU per event (major and minor) |
+| --native-max-samples | int | Native fault sample capacity (system-wide) |
+| --native-max-mappings | int | Native mapping record capacity |
+| --native-max-callchain-entries | int | Native callchain address capacity |
+| --perfetto-mode | (full\|lean) | Lean retains startup markers but omits page-cache and I/O evidence |
+| --report-only |  | Render existing processed inputs without collection or preprocessing |
+| --cohort | path | JSON array of {capture, label, cohort} rows for repeated/control-return comparisons |
+| --dwarf-recorder | path | Custom Android Simpleperf ELF with same-sample PERF_SAMPLE_ADDR support |
+| --symbol-dir | path | ELF debug files; only architecture/build-ID matches are used |
+| --r8-mapping | path | Exact-build R8 mapping (requires --mapping-apk-sha256) |
+| --mapping-apk-sha256 | text | SHA-256 of the APK built with the supplied mapping/profiles |
+| --startup-profile | path | Consumed startup profile in original-name text format |
+| --baseline-profile | path | Consumed baseline profile in original-name text format |
 | --native-stacks |  | Capture exact native/ART frame-pointer callchains with each fault |
 | --dwarf-stacks |  | Record system-wide major-fault DWARF/ART stacks; enrich only exact, verified event matches |
 | --reclaim-mapped-apks |  | Opt in to page-out advice on other processes' read-only installed APK mappings; strict cache checks remain |

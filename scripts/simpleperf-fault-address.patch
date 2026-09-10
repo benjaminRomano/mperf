@@ -1,0 +1,14 @@
+--- a/simpleperf/event_selection_set.cpp
++++ b/simpleperf/event_selection_set.cpp
+@@ -221,6 +221,11 @@
+   }
+   selection->event_type_modifier = *event_type;
+   selection->event_attr = CreateDefaultPerfEventAttr(event_type->event_type);
++  // mperf: preserve the fault address alongside the registers/stack that Simpleperf unwinds.
++  if (!for_stat_cmd_ && selection->event_attr.type == PERF_TYPE_SOFTWARE &&
++      selection->event_attr.config == PERF_COUNT_SW_PAGE_FAULTS_MAJ) {
++    selection->event_attr.sample_type |= PERF_SAMPLE_ADDR;
++  }
+   selection->event_attr.exclude_user = event_type->exclude_user;
+   selection->event_attr.exclude_kernel = event_type->exclude_kernel;
+   selection->event_attr.exclude_hv = event_type->exclude_hv;

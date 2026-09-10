@@ -95,8 +95,19 @@ internal object AndroidOat {
         output: Path,
         warnings: MutableList<String>,
     ) {
+        val diagnostics = mutableListOf<Map<String, Any?>>()
+
+        fun failure(
+            stage: String,
+            error: String,
+            remote: String? = null,
+        ) {
+            diagnostics += mapOf("artifact" to remote, "stage" to stage, "error" to error)
+            Json.write(output.resolve("oat-attribution-diagnostics.json"), diagnostics)
+        }
         val abi = Json.readMap(output.resolve("capture_metadata.json"))["abi"]
         if (abi !in listOf("arm64-v8a", "x86", "x86_64")) {
+            failure("abi_validation", "Unsupported ABI: $abi")
             warnings += "OAT method attribution is not yet validated for ABI $abi."
             return
         }
@@ -106,10 +117,12 @@ internal object AndroidOat {
             listOf("/apex/com.android.art/bin/oatdump", "/apex/com.android.runtime/bin/oatdump", "/system/bin/oatdump")
                 .firstOrNull { adb.rootShell("test -x ${quote(it)}", check = false).exitCode == 0 }
         if (tool == null) {
+            failure("tool_discovery", "Device oatdump is missing")
             warnings += "OAT method attribution unavailable: device oatdump is missing."
             return
         }
         for ((remote, local) in artifacts.filterKeys { it.endsWith(".odex") }) {
+            var stage = "artifact_identity"
             try {
                 val elf = AndroidBinary.elf(Files.readAllBytes(local))
                 if (elf.sections.none { it.name == ".text" }) continue
@@ -139,8 +152,11 @@ internal object AndroidOat {
                 val command =
                     "set -o pipefail; timeout 120 ${quote(tool)} --oat-file=${quote(remote)} " +
                         "--dex-file=${quote(apk)} --no-disassemble --no-dump:vmap | grep -F $selection | awk ${quote(limit)}"
+                stage = "oatdump_execution"
                 val dump = adb.rootShell(command, timeout = Duration.ofSeconds(130))
+                stage = "post_dump_identity"
                 verifyCurrent()
+                stage = "method_range_parsing"
                 val parsed = parse(dump.stdout.lineSequence(), apk, ZipLayout.dexIdentities(apkFile), elf)
                 val file = output.resolve("oatdump/${sha256(remote.toByteArray()).take(10)}.txt")
                 Files.createDirectories(file.parent)
@@ -158,7 +174,8 @@ internal object AndroidOat {
                         "methods" to parsed.size,
                     )
             } catch (error: Exception) {
-                warnings += "OAT method attribution unavailable for $remote: ${error.message}"
+                failure(stage, error.message ?: error.javaClass.simpleName, remote)
+                warnings += "OAT method attribution unavailable for $remote at $stage: ${error.message}"
             }
         }
         Json.write(output.resolve("oatdump.json"), manifest)

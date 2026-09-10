@@ -14,6 +14,7 @@ internal object AndroidDwarf {
     data class Buffers(
         val kernelPages: Int = 4096,
         val userMb: Int = 256,
+        val recorderPath: String = SimpleperfTools.DEVICE_PATH,
     ) {
         init {
             require(kernelPages in 64..16384 && kernelPages and (kernelPages - 1) == 0) { "Invalid DWARF kernel buffer pages" }
@@ -21,7 +22,7 @@ internal object AndroidDwarf {
         }
 
         fun command(): String =
-            "${SimpleperfTools.DEVICE_PATH} record -a -c 1 -m $kernelPages --user-buffer-size ${userMb}M " +
+            "$recorderPath record -a -c 1 -m $kernelPages --user-buffer-size ${userMb}M " +
                 "-e major-faults:u --call-graph dwarf --post-unwind=yes " +
                 "--no-callchain-joiner --no-cut-samples --clockid boottime --no-dump-kernel-symbols " +
                 "--start_profiling_fd 1 --duration 60 -o $REMOTE"
@@ -44,6 +45,7 @@ internal object AndroidDwarf {
         val ip: ULong,
         val cpu: Long,
         val frames: Long,
+        val address: ULong? = null,
     )
 
     data class Sample(
@@ -136,7 +138,7 @@ internal object AndroidDwarf {
         if (pid != null) {
             val stacks =
                 adb.shell(
-                    "${SimpleperfTools.DEVICE_PATH} report-sample -i $REMOTE --show-callchain --remove-gaps 0 --include-pid $pid",
+                    "${running.buffers.recorderPath} report-sample -i $REMOTE --show-callchain --remove-gaps 0 --include-pid $pid",
                     timeout = Duration.ofMinutes(2),
                 )
             Files.writeString(output.resolve("simpleperf-stacks.txt"), stacks.stdout)
@@ -295,7 +297,7 @@ internal object AndroidDwarf {
             u32(attr) == 1L &&
                 u64(attr + 8) == 6L &&
                 u64(attr + 16) == 1L &&
-                u64(attr + 24) == 0x1e7L &&
+                u64(attr + 24) in listOf(0x1e7L, 0x1efL) &&
                 u32(attr + 4) >= 96 &&
                 u32(attr + 4) + 16 <= attrSize &&
                 (flags and ((1L shl 4) or (1L shl 10))) == 0L &&
@@ -310,6 +312,7 @@ internal object AndroidDwarf {
         require(idsAt >= 104 && idsSize > 0 && idsSize % 8 == 0L)
         bounds(idsAt, idsSize)
         val ids = (0 until idsSize / 8).map { u64(idsAt + it * 8) }.toSet()
+        val addressBytes = if (u64(attr + 24) and 8L != 0L) 8L else 0L
         val result = mutableListOf<Identity>()
         var at = begin
         while (at < begin + size) {
@@ -320,17 +323,24 @@ internal object AndroidDwarf {
             require(recordSize >= 8 && at + recordSize <= begin + size) { "Invalid perf record bounds" }
             require(type !in listOf(2L, 5L, 13L)) { "Perf data includes loss or throttling" }
             if (type == 9L) {
-                require(recordSize >= 64) { "Truncated perf sample" }
-                val count = u64(at + 56)
+                require(recordSize >= 64 + addressBytes) { "Truncated perf sample" }
+                val count = u64(at + 56 + addressBytes)
                 require(
                     count >= 0 &&
-                        count <= (recordSize - 64) / 8 &&
-                        recordSize.toLong() == 64 + count * 8 &&
+                        count <= (recordSize - 64 - addressBytes) / 8 &&
+                        recordSize.toLong() == 64 + addressBytes + count * 8 &&
                         (misc and 7) == 2 &&
-                        u64(at + 48) == 1L &&
-                        u64(at + 32) in ids,
+                        u64(at + 48 + addressBytes) == 1L &&
+                        u64(at + 32 + addressBytes) in ids,
                 ) { "Invalid perf sample payload or mode" }
-                result += Identity(Key(u32(at + 16), u32(at + 20), u64(at + 24)), u64(at + 8).toULong(), u32(at + 40), count)
+                result +=
+                    Identity(
+                        Key(u32(at + 16), u32(at + 20), u64(at + 24)),
+                        u64(at + 8).toULong(),
+                        u32(at + 40 + addressBytes),
+                        count,
+                        if (addressBytes > 0) u64(at + 32).toULong() else null,
+                    )
             }
             at += recordSize
         }
@@ -446,6 +456,8 @@ internal object AndroidDwarf {
                 val fault = n.single()
                 val symbol = s.single()
                 if (fault["event_type"] == "major" &&
+                    r.address != null &&
+                    r.address == AndroidBinary.unsignedAddress(fault.getValue("address")) &&
                     r.ip == AndroidBinary.unsignedAddress(fault.getValue("ip")) &&
                     r.cpu == fault["cpu"]?.toLong() &&
                     r.frames > 0 &&
@@ -469,12 +481,15 @@ internal object AndroidDwarf {
                             },
                             mapOf(
                                 "stream" to "Simpleperf DWARF",
-                                "match" to "Exact PID, TID, boottime timestamp, runtime IP, CPU; period-one major event",
+                                "match" to (
+                                    "Same-sample fault address and DWARF/ART stack; " +
+                                        "verified PID, TID, boottime, IP, CPU and address"
+                                ),
                                 "timestamp_ns" to rawSample.key.timestamp,
                                 "ip" to "0x${rawSample.ip.toString(16)}",
                                 "cpu" to rawSample.cpu,
                                 "boot_id" to metadata["boot_id"],
-                                "address_source" to "Native fault event; not recorded by Simpleperf",
+                                "address_source" to "PERF_SAMPLE_ADDR in the same Simpleperf record as the unwound callchain",
                             ),
                         )
                 }
@@ -484,6 +499,7 @@ internal object AndroidDwarf {
             Matches(
                 matches,
                 mapOf(
+                    "address_bearing_samples" to raw.count { it.address != null },
                     "startup_major_faults" to majors,
                     "matched_startup_major_faults" to matches.size,
                     "unmatched_startup_major_faults" to majors - matches.size,
@@ -492,6 +508,14 @@ internal object AndroidDwarf {
                     "unmatched_target_samples" to targetCount - verified.size,
                     "ambiguous_target_keys" to ambiguous,
                 ),
+                if (raw.any { it.address != null }) {
+                    emptyList()
+                } else {
+                    listOf(
+                        "Simpleperf omitted PERF_SAMPLE_ADDR. Managed stacks remain independent; " +
+                            "timestamp agreement is not same-sample attribution.",
+                    )
+                },
             )
         } catch (error: Exception) {
             Matches(warnings = listOf("DWARF enrichment unavailable: ${error.message}."))
