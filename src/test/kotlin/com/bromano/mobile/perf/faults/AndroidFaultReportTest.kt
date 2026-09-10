@@ -5,6 +5,16 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class AndroidFaultReportTest {
+    @Test fun `comparison checks enabled DWARF recorder identity including legacy unknown hashes`() {
+        val stock = mapOf("simpleperf_status" to "complete", "simpleperf_recorder_sha256" to "a".repeat(64))
+        val custom = stock + ("simpleperf_recorder_sha256" to "b".repeat(64))
+        assertEquals(emptyList(), dwarfRecorderDifferences(stock, stock))
+        assertEquals(listOf("simpleperf_recorder_sha256"), dwarfRecorderDifferences(stock, custom))
+        assertEquals(listOf("simpleperf_recorder_sha256"), dwarfRecorderDifferences(stock - "simpleperf_recorder_sha256", stock))
+        val disabled = mapOf("simpleperf_status" to "disabled")
+        assertEquals(emptyList(), dwarfRecorderDifferences(disabled, disabled))
+    }
+
     @Test fun `comparison requires matching known compilation preparation and actual ART filters`() {
         fun state(
             mode: String,

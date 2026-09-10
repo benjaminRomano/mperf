@@ -132,13 +132,15 @@ function setTab(tab) {
     tab === "flame" ? "tab-flame" : "tab-stacks",
   );
   $("panel-sites").hidden = tab !== "sites";
+  $("panel-experiments").hidden = tab !== "experiments";
   $("panel-health").hidden = tab !== "health";
   $("panel-io").hidden = tab !== "io";
-  $("selectedSource").hidden = tab === "io" || tab === "health";
-  $("detailDock").hidden = tab === "io" || tab === "health";
+  $("selectedSource").hidden = tab === "io" || tab === "health" || tab === "experiments";
+  $("detailDock").hidden = tab === "io" || tab === "health" || tab === "experiments";
   if (tab === "pages") drawAccess();
   if (tab === "stacks" || tab === "flame") drawStacks();
   if (tab === "sites") drawSites();
+  if (tab === "experiments") drawExperiments();
   if (tab === "health") drawHealth();
   if (tab === "io") drawIo();
 }
@@ -893,6 +895,7 @@ changeRun();
 
 function drawExperiments() {
   const runs = REPORT.runs.filter((r) => r.experiment && !r.stacksOnly);
+  $("tab-experiments").hidden = !runs.length;
   $("experimentReadout").hidden = !runs.length;
   if (!runs.length) return;
   const cells = (values) => "<tr>" + values.map((v, i) => "<td>" +
@@ -912,5 +915,4 @@ function drawExperiments() {
   });
   Plotly.react("experimentPlot", traces, layout("Cumulative app-owned major faults", 320), config);
 }
-$("experimentReadout").addEventListener("toggle", () => { if ($("experimentReadout").open) drawExperiments(); });
 drawExperiments();

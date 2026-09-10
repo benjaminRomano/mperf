@@ -92,6 +92,7 @@ internal class DefaultAndroidFaultWorkflow(
             comparison = request.comparison,
             comparisonLabel = request.comparisonLabel,
             allowIncomparable = request.allowIncomparable,
+            cohort = request.cohort,
             attribution =
                 com.bromano.mobile.perf.faults.AndroidReportAttribution.Options(
                     request.symbolDirectory,

@@ -77,7 +77,12 @@ internal object AndroidCaptureContext {
                 name,
                 if (value == 0L) "pass" else "warning",
                 value?.toString() ?: "Unknown (legacy or incomplete capture)",
-                "Ring records and kernel counters can describe the same loss; they are not added twice.",
+                when (field) {
+                    "sample_drops" -> "Increase --native-max-samples for sample-array exhaustion."
+                    "mapping_drops" -> "Increase --native-max-mappings for mapping-array exhaustion."
+                    "callchain_overflow" -> "Increase --native-max-callchain-entries for callchain-array exhaustion."
+                    else -> "Increase --native-kernel-pages for ring loss; ring records and kernel counters may describe the same loss."
+                },
             )
         }
         metadata["omitted_evidence"]?.let { row("Omitted evidence", "info", it.toString(), "Omitted does not mean zero I/O.") }

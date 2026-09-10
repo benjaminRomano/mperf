@@ -131,12 +131,16 @@ error in `oat-attribution-diagnostics.json` and capture warnings.
 ```
 
 Paths are relative to the manifest. The primary capture can be a pre-treatment
-control labeled `Control`. Run plots share an x-axis, and Capture health → Experiment
-readout shows cumulative app-owned major-fault curves for every run, including return
-controls, per-run readouts and cohort medians. Fully drawn values are null when the
+control labeled `Control`. Run plots share an x-axis, and the Experiments tab
+shows cumulative app-owned major-fault curves for every run, including return controls, per-run readouts and cohort medians. Fully drawn values are null when the
 cutoff is only the first frame; the fully drawn sample count is reported separately.
 DEX 3+ remains a diagnostic breakdown. Per-run evidence includes APK hashes,
 compilation before/after, cache verification, recorder configuration and cutoff.
 Duplicate capture paths are rejected. `--allow-incomparable` is required for
 exploratory comparisons with differing preparation/recorders/cutoffs; such medians
 are descriptive, not causal estimates.
+
+![Experiments view with two real fixture captures and different cutoffs](images/startup-fault-experiments.png)
+
+The screenshot is an exploratory UI check across different fixture setups, not a
+measurement of a treatment effect.

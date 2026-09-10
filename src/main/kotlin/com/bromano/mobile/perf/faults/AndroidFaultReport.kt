@@ -44,6 +44,19 @@ internal fun compilationDifferences(
     return changed
 }
 
+internal fun dwarfRecorderDifferences(
+    a: Map<*, *>,
+    b: Map<*, *>,
+): List<String> {
+    if (a["simpleperf_status"] == "disabled" && b["simpleperf_status"] == "disabled") return emptyList()
+    val hash = a["simpleperf_recorder_sha256"] as? String
+    return if (hash?.matches(Regex("[0-9a-f]{64}")) == true && hash == b["simpleperf_recorder_sha256"]) {
+        emptyList()
+    } else {
+        listOf("simpleperf_recorder_sha256")
+    }
+}
+
 internal fun stableAndroidSourceLabel(
     path: String,
     packageName: String,
@@ -162,7 +175,8 @@ internal class AndroidFaultReport(
                     "reclaim_mapped_apks",
                     "native_buffer_config",
                     "perfetto_mode",
-                ).filter { a[it] == null || b[it] == null || a[it] != b[it] } + compilationDifferences(a, b)
+                ).filter { a[it] == null || b[it] == null || a[it] != b[it] } + compilationDifferences(a, b) +
+                    dwarfRecorderDifferences(a, b)
             val cutoffA = (a["startup"] as? Map<*, *>)?.get("end_marker")
             val cutoffB = (b["startup"] as? Map<*, *>)?.get("end_marker")
             require((cutoffA != null && cutoffA == cutoffB) || allowIncomparable) { "Comparison startup cutoffs differ or are unknown" }

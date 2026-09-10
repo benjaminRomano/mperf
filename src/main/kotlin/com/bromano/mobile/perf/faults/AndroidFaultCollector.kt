@@ -48,6 +48,13 @@ internal class AndroidFaultCollector(
         if (request.dwarfStacks) {
             if (request.dwarfRecorder == null) {
                 adb.sideloadSimpleperf()
+                dwarfHash =
+                    adb
+                        .rootShell("sha256sum ${quote(dwarfPath)}")
+                        .stdout
+                        .substringBefore(' ')
+                        .trim()
+                require(dwarfHash.matches(Regex("[0-9a-f]{64}"))) { "Unable to verify the stock Simpleperf identity" }
             } else {
                 val identity =
                     requireNotNull(AndroidElfIdentity.read(Files.readAllBytes(request.dwarfRecorder))) {

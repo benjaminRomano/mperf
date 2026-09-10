@@ -85,6 +85,10 @@ class AndroidReportOnlyTest {
         )
         assertTrue(run.path("reportInputs").path("renderer").has("version"))
         assertTrue(run.path("experiment").path("fullyDrawnMs").isNull)
+        val cohort = directory.resolve("cohort.json")
+        Json.write(cohort, listOf(mapOf("capture" to "missing-return-control", "label" to "Return control", "cohort" to "Control")))
+        assertFailsWith<java.nio.file.NoSuchFileException> { workflow.run(request.copy(cohort = cohort)) }
+        assertEquals(first, sha256(report), "Cohort validation must run before publishing")
         Files.writeString(capture.resolve("all_faults.csv"), "invalid\n")
         assertFailsWith<IllegalArgumentException> { workflow.run(request) }
         assertEquals(first, sha256(report), "Failed render must leave prior report intact")
