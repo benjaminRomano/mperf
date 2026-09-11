@@ -44,6 +44,19 @@ internal fun compilationDifferences(
     return changed
 }
 
+internal fun dwarfRecorderDifferences(
+    a: Map<*, *>,
+    b: Map<*, *>,
+): List<String> {
+    if (a["simpleperf_status"] == "disabled" && b["simpleperf_status"] == "disabled") return emptyList()
+    val hash = a["simpleperf_recorder_sha256"] as? String
+    return if (hash?.matches(Regex("[0-9a-f]{64}")) == true && hash == b["simpleperf_recorder_sha256"]) {
+        emptyList()
+    } else {
+        listOf("simpleperf_recorder_sha256")
+    }
+}
+
 internal fun stableAndroidSourceLabel(
     path: String,
     packageName: String,
@@ -109,11 +122,31 @@ internal class AndroidFaultReport(
         comparison: Path? = null,
         comparisonLabel: String = "Comparison",
         allowIncomparable: Boolean = false,
+        attribution: AndroidReportAttribution.Options = AndroidReportAttribution.Options(),
+        cohort: Path? = null,
     ) {
+        val cohortRows = cohort?.let(AndroidExperiments::read).orEmpty()
+        val capturePaths = listOfNotNull(capture, comparison) + cohortRows.map { it.capture }
+        val cohortHash =
+            cohort?.let {
+                com.bromano.mobile.perf.utils
+                    .sha256(it)
+            }
+        require(capturePaths.map { it.toRealPath() }.distinct().size == capturePaths.size) {
+            "A capture cannot appear twice in the same experiment"
+        }
+        val inputs = capturePaths.associateWith(AndroidReportInputs::hashes)
+        val extraInputs = attribution.hashes()
+        val renderer = AndroidReportInputs.renderer(engineRoot)
         val first = reportRun(capture, label).apply { put("perfettoTrace", perfettoTraceReference(capture, output)) }
         val runs = mutableListOf(first)
-        comparison?.let { other ->
-            val second = reportRun(other, comparisonLabel).apply { put("perfettoTrace", perfettoTraceReference(other, output)) }
+        for ((position, other) in capturePaths.drop(1).withIndex()) {
+            val row = cohortRows.getOrNull(position - if (comparison == null) 0 else 1)
+            val second =
+                reportRun(
+                    other,
+                    row?.label ?: comparisonLabel,
+                ).apply { put("perfettoTrace", perfettoTraceReference(other, output)) }
             val a = first.getValue("provenance") as Map<*, *>
             val b = second.getValue("provenance") as Map<*, *>
             require(a["package"] == b["package"] && a["page_size"] == b["page_size"]) {
@@ -140,23 +173,47 @@ internal class AndroidFaultReport(
                     "simpleperf_status",
                     "simpleperf_buffer_config",
                     "reclaim_mapped_apks",
-                ).filter { a[it] == null || b[it] == null || a[it] != b[it] } + compilationDifferences(a, b)
+                    "native_buffer_config",
+                    "perfetto_mode",
+                ).filter { a[it] == null || b[it] == null || a[it] != b[it] } + compilationDifferences(a, b) +
+                    dwarfRecorderDifferences(a, b)
+            val cutoffA = (a["startup"] as? Map<*, *>)?.get("end_marker")
+            val cutoffB = (b["startup"] as? Map<*, *>)?.get("end_marker")
+            require((cutoffA != null && cutoffA == cutoffB) || allowIncomparable) { "Comparison startup cutoffs differ or are unknown" }
             require(changed.isEmpty() || allowIncomparable) { "Comparison settings differ: ${changed.joinToString()}" }
             for (run in listOf(first, second)) {
                 @Suppress("UNCHECKED_CAST")
                 (run["notes"] as MutableList<String>).add("Comparison settings differ: ${changed.joinToString().ifBlank { "none" }}.")
             }
+            second["cohort"] = row?.cohort ?: comparisonLabel
             runs.add(second)
         }
-        for ((index, path) in listOfNotNull(capture, comparison).withIndex()) {
+        first["cohort"] = label
+        for ((index, path) in capturePaths.withIndex()) {
+            AndroidReportAttribution.apply(path, runs[index], attribution)
+            runs[index]["experiment"] = AndroidExperiments.summary(runs[index], inputs.getValue(path))
+            runs[index]["reportInputs"] = mapOf("sha256" to inputs.getValue(path), "renderer" to renderer)
             @Suppress("UNCHECKED_CAST")
             val metadata = runs[index].getValue("provenance") as Map<String, Any?>
 
             @Suppress("UNCHECKED_CAST")
             val notes = runs[index].getValue("notes") as MutableList<String>
             AndroidDwarf.reportRun(path, metadata, notes)?.let {
-                runs.add(it.toMutableMap().apply { put("perfettoTrace", perfettoTraceReference(path, output)) })
+                val companion = it.toMutableMap().apply { put("perfettoTrace", perfettoTraceReference(path, output)) }
+                AndroidReportAttribution.apply(path, companion, attribution)
+                runs.add(companion)
             }
+        }
+        require(
+            inputs.all { (path, hashes) -> AndroidReportInputs.hashes(path) == hashes } &&
+                attribution.hashes() == extraInputs &&
+                (
+                    cohort == null ||
+                        com.bromano.mobile.perf.utils
+                            .sha256(cohort) == cohortHash
+                ),
+        ) {
+            "Report inputs changed during rendering; existing output retained"
         }
         SharedFaultReport(engineRoot).write(runs, output, (first["provenance"] as Map<*, *>)["package"].toString() + " · startup faults")
     }
@@ -219,6 +276,7 @@ internal class AndroidFaultReport(
                                 "label" to frame["label"],
                                 "kind" to frame["frame_kind"],
                                 "file" to frame["file_name"],
+                                "fileOffset" to frame["file_offset"],
                                 "app" to androidAppOwned(frame["file_name"].orEmpty(), packageName),
                                 "unresolved" to (frame["file_name"].isNullOrEmpty() || frame["label"].orEmpty().startsWith("0x")),
                             )
@@ -295,7 +353,7 @@ internal class AndroidFaultReport(
                 "Major/minor are emitted Linux perf software fault events, not syscalls. Some kernel-accounted faults do not emit userspace perf samples.",
                 "Minor faults include anonymous allocation and copy-on-write, not just file-cache hits.",
                 "Read sources come from fault addresses and timestamped mappings. Native stacks are captured in the same event; DWARF stacks require a verified exact event match.",
-                "DEX method labels describe instructions stored on the faulted page, not proof those methods executed or triggered the fault.",
+                "Faulted DEX, caller physical DEX, and DEX methods stored on a page are distinct facts. DEX method labels describe instructions stored on the faulted page, not proof those methods executed or triggered the fault.",
                 "VDEX names require every ART location checksum to match the APK DEX entries. VDEX remains one analytical file.",
                 "Page-cache insertions include app threads and workers touching exact app-owned device/inode pairs. They correlate with reads/readahead, not proof of fault causality.",
                 "Compare code-layout changes using repeated, equally prepared captures. R8 DEX order and ART-compiled OAT layout differ.",

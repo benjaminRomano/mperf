@@ -179,37 +179,49 @@ class AndroidParityTest {
         val ip: Long = 4096,
         val cpu: Int = 2,
         val tid: Int = 11,
+        val address: Long = 0xabc,
     )
 
-    private fun perf(samples: List<Input>): ByteArray {
-        val data = ByteArray(264 + 72 * samples.size)
+    private fun perf(
+        samples: List<Input>,
+        addresses: Boolean = true,
+    ): ByteArray {
+        val extra = if (addresses) 8 else 0
+        val recordSize = 72 + extra
+        val data = ByteArray(264 + recordSize * samples.size)
         val b = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
         "PERFILE2".toByteArray().copyInto(data)
-        listOf(104L, 152L, 112L, 152L, 264L, (72 * samples.size).toLong()).forEachIndexed { i, value -> b.putLong(8 + i * 8, value) }
+        listOf(104L, 152L, 112L, 152L, 264L, (recordSize * samples.size).toLong()).forEachIndexed {
+            i,
+            value,
+            ->
+            b.putLong(8 + i * 8, value)
+        }
         b.putLong(104, 42)
         b.putInt(112, 1)
         b.putInt(116, 136)
         b.putLong(120, 6)
         b.putLong(128, 1)
-        b.putLong(136, 0x1e7)
+        b.putLong(136, if (addresses) 0x1ef else 0x1e7)
         b.putLong(152, (1L shl 25) or (1L shl 5))
         b.putInt(204, 7)
         b.putLong(248, 104)
         b.putLong(256, 8)
         samples.forEachIndexed { i, sample ->
-            val at = 264 + i * 72
+            val at = 264 + i * recordSize
             b.putInt(at, 9)
             b.putShort(at + 4, 2)
-            b.putShort(at + 6, 72)
+            b.putShort(at + 6, recordSize.toShort())
             b.putLong(at + 8, sample.ip)
             b.putInt(at + 16, 10)
             b.putInt(at + 20, sample.tid)
             b.putLong(at + 24, sample.time)
-            b.putLong(at + 32, 42)
-            b.putInt(at + 40, sample.cpu)
-            b.putLong(at + 48, 1)
-            b.putLong(at + 56, 1)
-            b.putLong(at + 64, sample.ip)
+            if (addresses) b.putLong(at + 32, sample.address)
+            b.putLong(at + 32 + extra, 42)
+            b.putInt(at + 40 + extra, sample.cpu)
+            b.putLong(at + 48 + extra, 1)
+            b.putLong(at + 56 + extra, 1)
+            b.putLong(at + 64 + extra, sample.ip)
         }
         return data
     }
@@ -304,13 +316,15 @@ class AndroidParityTest {
         assertEquals("Example.start", match.stack.single()["label"])
         assertEquals("user", match.stack.single()["kind"])
         assertEquals(1, result.coverage["matched_startup_major_faults"])
-        assertTrue(match.provenance["address_source"].toString().startsWith("Native fault event"))
+        assertTrue(match.provenance["address_source"].toString().startsWith("PERF_SAMPLE_ADDR"))
         assertNotNull(AndroidDwarf.reportRun(directory, metadata))
     }
 
     @Test fun `high bit native addresses survive processed CSV report and exact stack matching`() {
         for (address in listOf(0x8000000000000000UL, ULong.MAX_VALUE)) {
             val metadata = capture()
+            Files.write(directory.resolve("simpleperf.data"), perf(listOf(Input(address = address.toLong()))))
+            refreshCompanionHashes()
             val rawPath = directory.resolve("fault_events.csv")
             val native = Csv.read(rawPath).map { it + ("address" to "0x${address.toString(16)}") }
             Csv.write(rawPath, native.first().keys.toList(), native)
@@ -352,6 +366,21 @@ class AndroidParityTest {
         val result = AndroidDwarf.exactMatches(directory, metadata)
         assertTrue(result.matches.isEmpty())
         assertTrue(result.warnings.any { "integrity mismatch" in it })
+    }
+
+    @Test fun `stock simpleperf preserves independent stacks without claiming exact addresses`() {
+        val metadata = capture()
+        Files.write(directory.resolve("simpleperf.data"), perf(listOf(Input()), addresses = false))
+        refreshCompanionHashes()
+        val result = AndroidDwarf.exactMatches(directory, metadata)
+        assertTrue(result.matches.isEmpty())
+        assertTrue(result.warnings.single().contains("PERF_SAMPLE_ADDR"))
+        assertNotNull(AndroidDwarf.reportRun(directory, metadata))
+    }
+
+    @Test fun `address mismatch rejects otherwise identical managed sample`() {
+        val metadata = capture(raw = listOf(Input(address = 0xdef)))
+        assertTrue(AndroidDwarf.exactMatches(directory, metadata).matches.isEmpty())
     }
 
     @Test fun `near timestamp mismatched IP CPU or TID cannot be paired`() {
@@ -483,7 +512,7 @@ class AndroidParityTest {
     }
 
     @Test fun `raw perf parser rejects malformed layouts and nonperiod-one events`() {
-        for ((offset, value) in listOf(120 to 5L, 128 to 2L, 136 to 0x1efL, 264 + 48 to 2L, 264 + 56 to 100L)) {
+        for ((offset, value) in listOf(120 to 5L, 128 to 2L, 136 to 0x1ffL, 264 + 56 to 2L, 264 + 64 to 100L)) {
             val data = perf(listOf(Input()))
             ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN).putLong(offset, value)
             assertFailsWith<IllegalArgumentException> { AndroidDwarf.readIdentities(data) }

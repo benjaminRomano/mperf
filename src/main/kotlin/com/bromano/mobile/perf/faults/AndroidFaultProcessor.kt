@@ -134,16 +134,20 @@ internal class AndroidFaultProcessor {
                 mappingEvents,
             )
         val pageCache =
-            writePageCache(
-                output,
-                trace,
-                pid,
-                startup,
-                pageSize,
-                inodes.paths,
-                inodes.appKeys,
-                sectionEntries,
-            )
+            if (metadata["perfetto_mode"] == "lean") {
+                emptyList()
+            } else {
+                writePageCache(
+                    output,
+                    trace,
+                    pid,
+                    startup,
+                    pageSize,
+                    inodes.paths,
+                    inodes.appKeys,
+                    sectionEntries,
+                )
+            }
         writeFileSizes(output, inodes.sizes, sectionEntries)
         val fileBacked = allFaults.filter { it["mapping_kind"] == "file" }
         val binaryWarnings = AndroidBinary.enrich(output, artifacts, pageSize)

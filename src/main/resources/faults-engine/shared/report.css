@@ -531,3 +531,8 @@ pre {
     flex-wrap: wrap;
   }
 }
+
+#panel-experiments { overflow: auto; padding: 10px; }
+#experimentTable table { table-layout: auto; }
+#experimentTable td:nth-child(2), #experimentTable td:nth-child(3), #experimentTable td:nth-child(4) { white-space: nowrap; }
+#experimentTable pre { white-space: pre-wrap; max-height: 220px; overflow: auto; }

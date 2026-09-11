@@ -28,11 +28,11 @@
 #include "cpu_list.h"
 #include "apk_cache_reclaim.h"
 
-#define RING_DATA_PAGES 256
-#define MAX_SAMPLES 500000
-#define MAX_MAPPING_SAMPLES 100000
+static size_t ring_data_pages = 256;
+static size_t max_samples = 2000000;
+static size_t max_mappings = 200000;
 #define MAX_MAPPING_PATH 512
-#define MAX_CALLCHAIN_ENTRIES 4000000
+static size_t max_callchain_entries = 16000000;
 #define PERF_RECORD_LOST_SAMPLES_TYPE 13
 #define PERF_FORMAT_LOST_FLAG (1ULL << 4)
 
@@ -114,7 +114,7 @@ static void copy_from_ring(const struct perf_ring *ring, uint64_t offset,
 
 static void drain_ring(struct perf_ring *ring, struct fault_sample *samples,
                        size_t *sample_count, struct mapping_sample *mappings,
-                       size_t *mapping_count, uint64_t *discarded,
+                       size_t *mapping_count, uint64_t *sample_drops, uint64_t *mapping_drops,
                        uint64_t *integrity_errors, uint64_t *throttled,
                        uint64_t *callchains, size_t *callchain_count,
                        uint64_t *callchain_overflow,
@@ -149,6 +149,11 @@ static void drain_ring(struct perf_ring *ring, struct fault_sample *samples,
       const size_t expected_size = sizeof(header) + sizeof(payload);
       if (header.size >= expected_size) {
         copy_from_ring(ring, tail + sizeof(header), &payload, sizeof(payload));
+        if (*sample_count >= max_samples) {
+          *sample_drops += 1;
+          tail += header.size;
+          continue;
+        }
         uint64_t callchain_offset = 0;
         uint32_t captured_callchain_count = 0;
         if (capture_callchains) {
@@ -175,7 +180,7 @@ static void drain_ring(struct perf_ring *ring, struct fault_sample *samples,
             tail += header.size;
             continue;
           }
-          if (entry_count > MAX_CALLCHAIN_ENTRIES - *callchain_count) {
+          if (entry_count > max_callchain_entries - *callchain_count) {
             *callchain_overflow += 1;
             stop_requested = 1;
             tail += header.size;
@@ -191,7 +196,7 @@ static void drain_ring(struct perf_ring *ring, struct fault_sample *samples,
             *callchain_count += (size_t)entry_count;
           }
         }
-        if (*sample_count < MAX_SAMPLES) {
+        if (*sample_count < max_samples) {
           samples[*sample_count] = (struct fault_sample){
               .timestamp_ns = payload.time,
               .ip = payload.ip,
@@ -205,7 +210,7 @@ static void drain_ring(struct perf_ring *ring, struct fault_sample *samples,
           };
           *sample_count += 1;
         } else {
-          *discarded += 1;
+          *sample_drops += 1;
         }
       } else {
         *integrity_errors += 1;
@@ -237,8 +242,8 @@ static void drain_ring(struct perf_ring *ring, struct fault_sample *samples,
       if (header.size < fixed_size + 1 + sample_id_size) {
         *integrity_errors += 1;
         stop_requested = 1;
-      } else if (*mapping_count >= MAX_MAPPING_SAMPLES) {
-        *discarded += 1;
+      } else if (*mapping_count >= max_mappings) {
+        *mapping_drops += 1;
       } else {
         copy_from_ring(ring, tail + sizeof(header), &payload, sizeof(payload));
         copy_from_ring(ring, tail + header.size - sample_id_size, &sample_id,
@@ -316,6 +321,7 @@ static void usage(const char *program) {
   fprintf(stderr,
           "Usage: %s --output FILE --mappings-output FILE "
           "[--callchains-output FILE] [--duration-ms N]\n"
+          "       [--max-samples N] [--max-mappings N] [--max-callchain-entries N] [--kernel-pages N]\n"
           "       %s --residency FILE [FILE ...]\n"
           "       %s --evict FILE [FILE ...]\n"
           "       %s --reclaim-mapped-apks APK [APK ...]\n",
@@ -479,6 +485,33 @@ int main(int argc, char **argv) {
     } else if (strcmp(argv[index], "--callchains-output") == 0 &&
                index + 1 < argc) {
       callchains_output_path = argv[++index];
+    } else if ((strcmp(argv[index], "--max-samples") == 0 ||
+                strcmp(argv[index], "--max-mappings") == 0 ||
+                strcmp(argv[index], "--max-callchain-entries") == 0) && index + 1 < argc) {
+      size_t *capacity = strcmp(argv[index], "--max-samples") == 0 ? &max_samples :
+          strcmp(argv[index], "--max-mappings") == 0 ? &max_mappings : &max_callchain_entries;
+      const size_t element_size = capacity == &max_samples ? sizeof(struct fault_sample) :
+          capacity == &max_mappings ? sizeof(struct mapping_sample) : sizeof(uint64_t);
+      char *end = NULL;
+      errno = 0;
+      const char *value = argv[++index];
+      uint64_t parsed = strtoull(value, &end, 10);
+      if (errno != 0 || value[0] < '0' || value[0] > '9' || *end != '\0' ||
+          parsed == 0 || parsed > SIZE_MAX / element_size) {
+        usage(argv[0]);
+        return EXIT_FAILURE;
+      }
+      *capacity = (size_t)parsed;
+    } else if (strcmp(argv[index], "--kernel-pages") == 0 && index + 1 < argc) {
+      char *end = NULL;
+      const char *value = argv[++index];
+      errno = 0;
+      uint64_t parsed = strtoull(value, &end, 10);
+      if (errno != 0 || *end != '\0' || parsed < 64 || parsed > 16384 || (parsed & (parsed - 1)) != 0) {
+        usage(argv[0]);
+        return EXIT_FAILURE;
+      }
+      ring_data_pages = (size_t)parsed;
     } else if (strcmp(argv[index], "--duration-ms") == 0 && index + 1 < argc) {
       char *end = NULL;
       errno = 0;
@@ -516,13 +549,13 @@ int main(int argc, char **argv) {
   const size_t ring_count = cpu_count * 2;
   struct perf_ring *rings = calloc(ring_count, sizeof(*rings));
   struct pollfd *poll_fds = calloc(ring_count, sizeof(*poll_fds));
-  struct fault_sample *samples = malloc(MAX_SAMPLES * sizeof(*samples));
+  struct fault_sample *samples = malloc(max_samples * sizeof(*samples));
   struct mapping_sample *mappings =
-      malloc(MAX_MAPPING_SAMPLES * sizeof(*mappings));
+      malloc(max_mappings * sizeof(*mappings));
   uint64_t *callchains =
       callchains_output_path == NULL
           ? NULL
-          : malloc(MAX_CALLCHAIN_ENTRIES * sizeof(*callchains));
+          : malloc(max_callchain_entries * sizeof(*callchains));
   if (rings == NULL || poll_fds == NULL || samples == NULL ||
       mappings == NULL || (callchains_output_path != NULL && callchains == NULL)) {
     fprintf(stderr, "Unable to allocate collector buffers\n");
@@ -572,7 +605,7 @@ int main(int argc, char **argv) {
       }
 
       const size_t mmap_size =
-          ((size_t)RING_DATA_PAGES + 1) * (size_t)page_size;
+          ((size_t)ring_data_pages + 1) * (size_t)page_size;
       void *mapping =
           mmap(NULL, mmap_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
       if (mapping == MAP_FAILED) {
@@ -585,7 +618,7 @@ int main(int argc, char **argv) {
           .kind = (enum fault_kind)kind,
           .metadata = mapping,
           .mmap_size = mmap_size,
-          .data_size = (size_t)RING_DATA_PAGES * (size_t)page_size,
+          .data_size = (size_t)ring_data_pages * (size_t)page_size,
       };
       poll_fds[opened_rings] = (struct pollfd){
           .fd = fd,
@@ -611,7 +644,8 @@ int main(int argc, char **argv) {
   size_t sample_count = 0;
   size_t mapping_count = 0;
   size_t callchain_count = 0;
-  uint64_t discarded = 0;
+  uint64_t sample_drops = 0;
+  uint64_t mapping_drops = 0;
   uint64_t integrity_errors = 0;
   uint64_t throttled = 0;
   uint64_t callchain_overflow = 0;
@@ -630,16 +664,18 @@ int main(int argc, char **argv) {
     }
     for (size_t index = 0; index < opened_rings; ++index) {
       drain_ring(&rings[index], samples, &sample_count, mappings,
-                 &mapping_count, &discarded, &integrity_errors, &throttled,
+                 &mapping_count, &sample_drops, &mapping_drops, &integrity_errors, &throttled,
                  callchains, &callchain_count, &callchain_overflow,
                  callchains_output_path != NULL);
     }
   }
 
   for (size_t index = 0; index < opened_rings; ++index) {
-    ioctl(rings[index].fd, PERF_EVENT_IOC_DISABLE, 0);
+    if (ioctl(rings[index].fd, PERF_EVENT_IOC_DISABLE, 0) != 0) integrity_errors += 1;
+  }
+  for (size_t index = 0; index < opened_rings; ++index) {
     drain_ring(&rings[index], samples, &sample_count, mappings, &mapping_count,
-               &discarded, &integrity_errors, &throttled, callchains,
+               &sample_drops, &mapping_drops, &integrity_errors, &throttled, callchains,
                &callchain_count, &callchain_overflow,
                callchains_output_path != NULL);
     if (lost_counter_supported) {
@@ -747,8 +783,12 @@ int main(int argc, char **argv) {
     }
   }
 
-  uint64_t lost = discarded;
+  uint64_t ring_lost = 0;
+  uint64_t counter_lost = 0;
+  uint64_t lost = sample_drops + mapping_drops;
   for (size_t index = 0; index < opened_rings; ++index) {
+    ring_lost += rings[index].lost;
+    counter_lost += rings[index].counter_lost;
     lost += rings[index].lost > rings[index].counter_lost
                 ? rings[index].lost
                 : rings[index].counter_lost;
@@ -761,18 +801,21 @@ int main(int argc, char **argv) {
           " samples=%zu mappings=%zu lost=%" PRIu64 " integrity_errors=%" PRIu64
           " throttled=%" PRIu64 " callchain_entries=%zu"
           " callchain_overflow=%" PRIu64 " lost_counter_supported=%d"
-          " max_samples=%d max_mappings=%d max_callchain_entries=%d"
+          " sample_drops=%" PRIu64 " mapping_drops=%" PRIu64
+          " ring_lost=%" PRIu64 " counter_lost=%" PRIu64
+          " max_samples=%zu max_mappings=%zu max_callchain_entries=%zu"
           " record_buffer_bytes=%zu perf_ring_bytes=%zu\n",
           started_ns, ended_ns, sample_count, mapping_count, lost,
           integrity_errors, throttled, callchain_count, callchain_overflow,
-          lost_counter_supported ? 1 : 0, MAX_SAMPLES, MAX_MAPPING_SAMPLES,
-          callchains_output_path == NULL ? 0 : MAX_CALLCHAIN_ENTRIES,
-          MAX_SAMPLES * sizeof(*samples) +
-              MAX_MAPPING_SAMPLES * sizeof(*mappings) +
+          lost_counter_supported ? 1 : 0, sample_drops, mapping_drops,
+          ring_lost, counter_lost, max_samples, max_mappings,
+          callchains_output_path == NULL ? 0 : max_callchain_entries,
+          max_samples * sizeof(*samples) +
+              max_mappings * sizeof(*mappings) +
               (callchains_output_path == NULL
                    ? 0
-                   : MAX_CALLCHAIN_ENTRIES * sizeof(*callchains)),
-          opened_rings * ((size_t)RING_DATA_PAGES + 1) * (size_t)page_size);
+                   : max_callchain_entries * sizeof(*callchains)),
+          opened_rings * ((size_t)ring_data_pages + 1) * (size_t)page_size);
 
   free(callchains);
   free(mappings);

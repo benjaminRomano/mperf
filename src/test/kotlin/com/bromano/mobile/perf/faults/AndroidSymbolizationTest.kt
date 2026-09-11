@@ -13,15 +13,23 @@ class AndroidSymbolizationTest {
     @TempDir lateinit var directory: Path
 
     @Test fun `failed symbolization preserves exact frames and continues with other binaries`() {
-        val data = ByteArray(128)
+        val data = ByteArray(256)
         byteArrayOf(127, 69, 76, 70, 2, 1).copyInto(data)
         ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN).apply {
+            putShort(18, 62)
             putLong(32, 64)
             putShort(54, 56)
-            putShort(56, 1)
+            putShort(56, 2)
             putInt(64, 1)
-            putLong(96, 128)
+            putLong(96, 256)
+            putInt(120, 4)
+            putLong(128, 192)
+            putLong(152, 20)
+            putInt(192, 4)
+            putInt(196, 4)
+            putInt(200, 3)
         }
+        byteArrayOf(71, 78, 85, 0, 1, 2, 3, 4).copyInto(data, 204)
         val bad = directory.resolve("bad.so").also { Files.write(it, data) }
         val good = directory.resolve("good.so").also { Files.write(it, data) }
         val tool = directory.resolve("llvm-symbolizer")

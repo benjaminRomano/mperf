@@ -10,6 +10,9 @@ for (const run of REPORT.runs) {
   delete run.stacks;
   delete run.frames;
 }
+const commonTimeEnd = REPORT.runs.reduce((maximum, r) =>
+  r.events.reduce((end, event) => Math.max(end, Number(event.time) || 0),
+    Math.max(maximum, Number(r.provenance?.startup?.duration_ns || 0) / 1e6)), 1);
 const $ = (id) => document.getElementById(id);
 const perfetto = FaultPerfetto.create({
   button: $("openPerfetto"),
@@ -89,6 +92,7 @@ function layout(ytitle, height = 550) {
     hoverlabel: { namelength: -1 },
     xaxis: {
       title: { text: "Elapsed startup time (ms)" },
+      range: [0, commonTimeEnd],
       automargin: true,
       gridcolor: "#e5e8ec",
       zeroline: false,
@@ -128,13 +132,15 @@ function setTab(tab) {
     tab === "flame" ? "tab-flame" : "tab-stacks",
   );
   $("panel-sites").hidden = tab !== "sites";
+  $("panel-experiments").hidden = tab !== "experiments";
   $("panel-health").hidden = tab !== "health";
   $("panel-io").hidden = tab !== "io";
-  $("selectedSource").hidden = tab === "io" || tab === "health";
-  $("detailDock").hidden = tab === "io" || tab === "health";
+  $("selectedSource").hidden = tab === "io" || tab === "health" || tab === "experiments";
+  $("detailDock").hidden = tab === "io" || tab === "health" || tab === "experiments";
   if (tab === "pages") drawAccess();
   if (tab === "stacks" || tab === "flame") drawStacks();
   if (tab === "sites") drawSites();
+  if (tab === "experiments") drawExperiments();
   if (tab === "health") drawHealth();
   if (tab === "io") drawIo();
 }
@@ -222,7 +228,8 @@ function changeRun() {
   const majors = run.events.filter((e) => e.major),
     mapped = majors.filter((e) => e.offset !== null);
   $("summary").textContent =
-    run.subtitle +
+    (run.experiment ? "Fully drawn: " + (run.experiment.fullyDrawnMs === null ? "unavailable" : fmt(run.experiment.fullyDrawnMs) + " ms") +
+      " · " + fmt(run.experiment.appMajorFaults) + " app-owned major faults · " : "") + run.subtitle +
     " · " +
     fmt(majors.length) +
     " major · " +
@@ -262,6 +269,7 @@ function update() {
       (kind === "all" || (kind === "major") === e.major) &&
       (!thread || e.thread === thread) &&
       FaultModel.matchesRegion(e, section) &&
+      FaultModel.matchesCallerDex(e, $("callerDex").value) &&
       (!range || (e[range.field] >= range.lo && e[range.field] <= range.hi)) &&
       (!query ||
         JSON.stringify([
@@ -452,7 +460,7 @@ function drawAccess() {
   l.xaxis.title.text = order
     ? "Recorded fault index"
     : "Elapsed startup time (ms)";
-  if (order) l.xaxis.tickformat = ",d";
+  if (order) { l.xaxis.tickformat = ",d"; delete l.xaxis.range; }
   if (mode === "lanes") {
     l.yaxis = {
       tickvals: keys,
@@ -643,6 +651,10 @@ function selectFault(e) {
     Thread: e.thread,
     "Capture sequence": e.id,
     ...e.detail,
+    "Caller origins and profile audit": JSON.stringify(e.stack.filter((f) => f.origins?.length).map((f) => ({
+      recorded: f.recordedLabel, origins: f.origins, status: f.originStatus, physicalDex: f.physicalDex,
+      physicalDexCandidates: f.physicalDexCandidates, profiles: f.profileAudit,
+    })), null, 2),
   };
   $("detail").innerHTML =
     '<dl class="detail-grid">' +
@@ -808,7 +820,7 @@ document
   );
 REPORT.runs.forEach((r, i) => option($("run"), i, r.label));
 $("run").addEventListener("change", changeRun);
-for (const id of ["kind", "source", "thread", "section", "includeNonFile"])
+for (const id of ["kind", "source", "thread", "section", "callerDex", "includeNonFile"])
   $(id).addEventListener("change", update);
 $("search").addEventListener("input", update);
 $("view").addEventListener("change", () => {
@@ -822,6 +834,7 @@ $("reset").addEventListener("click", () => {
   $("source").value = "";
   $("thread").value = "";
   $("section").value = "";
+  $("callerDex").value = "";
   $("search").value = "";
   range = null;
   update();
@@ -879,3 +892,27 @@ new ResizeObserver(() => {
   if (!$("detail").hidden) syncDetailHeight();
 }).observe(document.querySelector(".analysis-panel"));
 changeRun();
+
+function drawExperiments() {
+  const runs = REPORT.runs.filter((r) => r.experiment && !r.stacksOnly);
+  $("tab-experiments").hidden = !runs.length;
+  $("experimentReadout").hidden = !runs.length;
+  if (!runs.length) return;
+  const cells = (values) => "<tr>" + values.map((v, i) => "<td>" +
+    (i === 4 && typeof v === "object" ? "<details><summary>Build · preparation · cutoff</summary><pre>" +
+      escapeHtml(JSON.stringify(v, null, 2)) + "</pre></details>" : escapeHtml(v ?? "unavailable")) + "</td>").join("") + "</tr>";
+  $("experimentTable").innerHTML = "<table><thead>" + cells(["Run / cohort", "Fully drawn ms", "App major", "DEX 3+ (diagnostic)", "Provenance"]) +
+    "</thead><tbody>" + runs.map((r) => cells([r.label + " / " + r.cohort, r.experiment.fullyDrawnMs,
+      r.experiment.appMajorFaults, r.experiment.dex3Plus,
+      r.experiment])).join("") +
+    FaultModel.experimentCohorts(runs).map((g) => cells([g.cohort + " median (n=" + g.count + "; fully drawn n=" + g.fullyDrawnCount + ")",
+      g.fullyDrawnMedian, g.appMajorMedian, g.dex3PlusMedian, "Inspect each run's build, compilation, cache, recorder and cutoff above; exploratory cohorts are not causal estimates."])).join("") + "</tbody></table>";
+  const traces = runs.map((r) => {
+    let count = 0;
+    const points = r.events.filter((e) => e.major && r.sources[e.source]?.app).slice().sort((a,b) => a.time-b.time);
+    return {name: r.label, mode: "lines", x: [0, ...points.map((e) => e.time), r.experiment.cutoffMs ?? 0],
+      y: [0, ...points.map(() => ++count), count], line: {shape: "hv"}};
+  });
+  Plotly.react("experimentPlot", traces, layout("Cumulative app-owned major faults", 320), config);
+}
+drawExperiments();

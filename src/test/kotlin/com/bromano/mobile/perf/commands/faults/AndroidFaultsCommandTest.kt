@@ -33,7 +33,9 @@ class AndroidFaultsCommandTest {
             command.test(
                 "--device emulator-5554 --out $output --reboot-before-collect " +
                     "--max-resident-pages 0 --settle-ms 900 --native-stacks --dwarf-stacks " +
-                    "--dwarf-kernel-pages 8192 --dwarf-user-buffer-mb 512 --reclaim-mapped-apks --overwrite --no-open",
+                    "--dwarf-kernel-pages 8192 --dwarf-user-buffer-mb 512 --reclaim-mapped-apks --overwrite --no-open " +
+                    "--native-kernel-pages 1024 --native-max-samples 3000000 --native-max-mappings 500000 " +
+                    "--native-max-callchain-entries 24000000 --perfetto-mode lean",
             )
 
         assertEquals(0, result.statusCode, result.output)
@@ -48,6 +50,11 @@ class AndroidFaultsCommandTest {
         assertTrue(request.dwarfStacks)
         assertEquals(8192, request.dwarfKernelPages)
         assertEquals(512, request.dwarfUserBufferMb)
+        assertEquals(1024, request.nativeKernelPages)
+        assertEquals(3_000_000, request.nativeMaxSamples)
+        assertEquals(500_000, request.nativeMaxMappings)
+        assertEquals(24_000_000, request.nativeMaxCallchainEntries)
+        assertEquals("lean", request.perfettoMode)
         assertTrue(request.reclaimMappedApks)
         assertTrue(request.overwrite)
         assertEquals("speed-profile", request.compilation)
@@ -83,6 +90,16 @@ class AndroidFaultsCommandTest {
         assertEquals("reordered", request.comparisonLabel)
         assertTrue(request.allowIncomparable)
         assertEquals("as-is", request.compilation)
+    }
+
+    @Test
+    fun `report-only needs no configured package and preserves its distinct mode`() {
+        val workflow = RecordingAndroidFaultWorkflow()
+        val command = AndroidFaultsCommand(FakeShell(), Config(android = null), FixedFaultEngine(temporaryDirectory), workflow)
+        val result = command.test("--out $temporaryDirectory --report-only --no-open")
+        assertEquals(0, result.statusCode, result.output)
+        assertTrue(workflow.requests.single().reportOnly)
+        assertTrue(!workflow.requests.single().skipCollect)
     }
 
     @Test

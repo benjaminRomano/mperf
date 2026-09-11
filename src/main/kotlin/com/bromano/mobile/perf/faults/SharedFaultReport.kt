@@ -41,7 +41,7 @@ internal class SharedFaultReport(
             Regex("__(TITLE|STYLE|PLOTLY|DATA|SCRIPT|MODEL|STACKS|PERFETTO|CONTEXT)__")
                 .replace(Files.readString(assets.resolve("report.html"))) { replacements.getValue(it.groupValues[1]) }
         output.toAbsolutePath().parent?.let(Files::createDirectories)
-        Files.writeString(output, document)
+        AtomicOutput.write(output, document)
     }
 
     /** Repeated stacks share storage, not event identity or analytical weight. */

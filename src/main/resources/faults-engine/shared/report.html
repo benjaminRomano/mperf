@@ -37,6 +37,7 @@
         >Region
         <select id="section"></select
       ></label>
+      <label>Caller DEX<select id="callerDex"><option value="">All callers</option><option value="classes2.dex">Secondary DEX</option><option value="dex3plus">DEX 3+ callers</option><option value="unknown">Unknown caller DEX</option></select></label>
       <label class="search"
         >Find
         <input
@@ -90,6 +91,7 @@
       </aside>
       <div class="analysis-panel">
         <nav class="tabs" role="tablist" aria-label="Analysis view">
+          <button role="tab" id="tab-experiments" aria-controls="panel-experiments" data-tab="experiments" aria-selected="false">Experiments</button>
           <button
             role="tab"
             id="tab-health"
@@ -146,6 +148,12 @@
           </button>
         </nav>
         <p id="selectedSource"></p>
+        <section id="panel-experiments" role="tabpanel" aria-labelledby="tab-experiments" hidden>
+          <div id="experimentReadout">
+            <p class="view-note">All runs and cohorts. Fully drawn latency is unavailable when only the first frame was captured. DEX 3+ is diagnostic page content, not proof of execution. Run plots share the startup time axis.</p>
+            <div id="experimentTable"></div><div id="experimentPlot"></div>
+          </div>
+        </section>
         <section
           id="panel-health"
           role="tabpanel"
