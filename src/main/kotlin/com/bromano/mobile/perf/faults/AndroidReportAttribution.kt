@@ -216,6 +216,42 @@ internal object AndroidReportAttribution {
     private fun addressKey(frame: Map<*, *>): String =
         frame["fileOffset"]?.toString()?.takeIf(String::isNotBlank)?.let { "offset:$it" } ?: "vaddr:${frame["ip"]}"
 
+    private data class SymbolSource(
+        val data: ByteArray,
+        val frames: List<Map<*, *>>,
+        val containerOffset: Long = 0,
+    )
+
+    private fun symbolSources(
+        remote: String,
+        frames: List<Map<*, *>>,
+        artifacts: Map<String, Path>,
+    ): List<SymbolSource> {
+        val local = artifacts[remote.substringBefore('!')] ?: return emptyList()
+        if ('!' !in remote && !remote.endsWith(".apk")) return listOf(SymbolSource(Files.readAllBytes(local), frames))
+        java.util.zip.ZipFile(local.toFile()).use { archive ->
+            fun member(name: String): ByteArray? {
+                val entry = archive.getEntry(name) ?: return null
+                if (entry.size !in 1..(256L * 1024 * 1024)) return null
+                val data = archive.getInputStream(entry).use { it.readNBytes(256 * 1024 * 1024 + 1) }
+                return data.takeIf { it.size.toLong() == entry.size }
+            }
+            if ('!' in remote) {
+                return listOfNotNull(member(remote.substringAfter('!').removePrefix("/"))?.let { SymbolSource(it, frames) })
+            }
+            // Native mmap records name the APK and use offsets into its stored ZIP payloads.
+            val entries = ZipLayout.read(local).filter { it.compression == "stored" && it.name.endsWith(".so") }
+            val grouped =
+                frames.groupBy { frame ->
+                    val offset = frame["fileOffset"]?.toString()?.toLongOrNull()
+                    entries.singleOrNull { offset != null && offset in it.dataOffset until it.dataEnd }
+                }
+            return grouped.mapNotNull { (entry, selected) ->
+                if (entry == null) null else member(entry.name)?.let { SymbolSource(it, selected, entry.dataOffset) }
+            }
+        }
+    }
+
     private fun resolveSymbols(
         artifacts: Map<String, Path>,
         events: List<Map<String, Any?>>,
@@ -237,75 +273,66 @@ internal object AndroidReportAttribution {
         val result = mutableMapOf<Pair<String, String>, String>()
         val frames = events.flatMap { (it["stack"] as? List<*>).orEmpty() }.filterIsInstance<Map<*, *>>()
         for ((remote, group) in frames.groupBy { it["file"].toString() }) {
-            val data =
-                if ('!' in remote) {
-                    val apk = artifacts[remote.substringBefore('!')] ?: continue
-                    java.util.zip.ZipFile(apk.toFile()).use { archive ->
-                        val entry = archive.getEntry(remote.substringAfter('!').removePrefix("/"))
-                        if (entry == null || entry.size !in 1..(256L * 1024 * 1024)) {
-                            null
-                        } else {
-                            archive.getInputStream(entry).use { it.readNBytes(256 * 1024 * 1024 + 1) }
-                        }
-                    } ?: continue
-                } else {
-                    Files.readAllBytes(artifacts[remote] ?: continue)
-                }
-            val identity = AndroidElfIdentity.read(data) ?: continue
-            val matches = candidates[identity].orEmpty()
-            if (matches.isEmpty()) continue
-            // Multiple copies with identical bytes are harmless; differing same-ID files need an explicit choice.
-            require(matches.map(::sha256).distinct().size == 1) { "Ambiguous debug ELF files for $remote (${identity.buildId})" }
-            val local = matches.first()
-            val segments = AndroidBinary.elf(data).segments
-            val addresses =
-                group
-                    .mapNotNull { frame ->
-                        val offset = frame["fileOffset"]?.toString()?.toLongOrNull()
-                        val address =
-                            if (offset != null) {
-                                segments.singleOrNull { offset in it.start until it.end }?.let { it.address + offset - it.start }
-                            } else {
-                                frame["ip"]?.toString()?.removePrefix("0x")?.toLongOrNull(16)?.takeIf { address ->
-                                    segments.any { address >= it.address && address - it.address < it.end - it.start }
+            for (source in symbolSources(remote, group, artifacts)) {
+                val data = source.data
+                val identity = AndroidElfIdentity.read(data) ?: continue
+                val matches = candidates[identity].orEmpty()
+                if (matches.isEmpty()) continue
+                // Multiple copies with identical bytes are harmless; differing same-ID files need an explicit choice.
+                require(matches.map(::sha256).distinct().size == 1) { "Ambiguous debug ELF files for $remote (${identity.buildId})" }
+                val local = matches.first()
+                val segments = AndroidBinary.elf(data).segments
+                val addresses =
+                    source.frames
+                        .mapNotNull { frame ->
+                            val offset = frame["fileOffset"]?.toString()?.toLongOrNull()?.minus(source.containerOffset)
+                            val address =
+                                if (offset != null) {
+                                    segments.singleOrNull { offset in it.start until it.end }?.let { it.address + offset - it.start }
+                                } else {
+                                    frame["ip"]?.toString()?.removePrefix("0x")?.toLongOrNull(16)?.takeIf { address ->
+                                        segments.any { address >= it.address && address - it.address < it.end - it.start }
+                                    }
                                 }
-                            }
-                        address?.let { addressKey(frame) to it }
-                    }.toMap()
-            if (addresses.isEmpty()) continue
-            val process =
-                ProcessBuilder(
-                    tool.toString(),
-                    "--obj",
-                    local.toString(),
-                    "--output-style=JSON",
-                    "--no-inlines",
-                    "--demangle",
-                ).start()
-            var stdout = ""
-            var stderr = ""
-            val reader = thread(isDaemon = true) { stdout = process.inputStream.bufferedReader().use { it.readText() } }
-            val errors = thread(isDaemon = true) { stderr = process.errorStream.bufferedReader().use { it.readText() } }
-            try {
-                process.outputStream.bufferedWriter().use { writer -> addresses.values.forEach { writer.write("0x${it.toString(16)}\n") } }
-                require(process.waitFor(60, TimeUnit.SECONDS)) { "Symbolizer timed out" }
-                reader.join(5000)
-                errors.join(5000)
-                require(!reader.isAlive && !errors.isAlive && process.exitValue() == 0) { "Symbolizer failed: $stderr" }
-                val values =
-                    stdout
-                        .lineSequence()
-                        .filter(String::isNotBlank)
-                        .map { Json.mapper.readTree(it) }
-                        .toList()
-                require(values.size == addresses.size) { "Symbolizer output count mismatch" }
-                addresses.keys.zip(values).forEach { (offset, value) ->
-                    value.path("Symbol").firstOrNull()?.path("FunctionName")?.asText()?.takeUnless { it.isBlank() || it == "??" }?.let {
-                        result[remote to offset] = it
+                            address?.let { addressKey(frame) to it }
+                        }.toMap()
+                if (addresses.isEmpty()) continue
+                val process =
+                    ProcessBuilder(
+                        tool.toString(),
+                        "--obj",
+                        local.toString(),
+                        "--output-style=JSON",
+                        "--no-inlines",
+                        "--demangle",
+                    ).start()
+                var stdout = ""
+                var stderr = ""
+                val reader = thread(isDaemon = true) { stdout = process.inputStream.bufferedReader().use { it.readText() } }
+                val errors = thread(isDaemon = true) { stderr = process.errorStream.bufferedReader().use { it.readText() } }
+                try {
+                    process.outputStream.bufferedWriter().use { writer ->
+                        addresses.values.forEach { writer.write("0x${it.toString(16)}\n") }
                     }
+                    require(process.waitFor(60, TimeUnit.SECONDS)) { "Symbolizer timed out" }
+                    reader.join(5000)
+                    errors.join(5000)
+                    require(!reader.isAlive && !errors.isAlive && process.exitValue() == 0) { "Symbolizer failed: $stderr" }
+                    val values =
+                        stdout
+                            .lineSequence()
+                            .filter(String::isNotBlank)
+                            .map { Json.mapper.readTree(it) }
+                            .toList()
+                    require(values.size == addresses.size) { "Symbolizer output count mismatch" }
+                    addresses.keys.zip(values).forEach { (offset, value) ->
+                        value.path("Symbol").firstOrNull()?.path("FunctionName")?.asText()?.takeUnless { it.isBlank() || it == "??" }?.let {
+                            result[remote to offset] = it
+                        }
+                    }
+                } finally {
+                    if (process.isAlive) process.destroyForcibly()
                 }
-            } finally {
-                if (process.isAlive) process.destroyForcibly()
             }
         }
         return result

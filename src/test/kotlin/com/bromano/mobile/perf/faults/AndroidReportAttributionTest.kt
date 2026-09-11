@@ -113,6 +113,81 @@ class AndroidReportAttributionTest {
         }
     }
 
+    @Test fun `APK mapped native offsets are translated only within stored ELF members`() {
+        val apk = directory.resolve("base.apk")
+        java.util.zip.ZipOutputStream(Files.newOutputStream(apk)).use { archive ->
+            for ((name, data) in listOf("assets/padding" to ByteArray(512), "lib/x86_64/libnative.so" to elf())) {
+                val entry =
+                    java.util.zip.ZipEntry(name).apply {
+                        method = java.util.zip.ZipEntry.STORED
+                        size = data.size.toLong()
+                        crc =
+                            java.util.zip
+                                .CRC32()
+                                .apply { update(data) }
+                                .value
+                    }
+                archive.putNextEntry(entry)
+                archive.write(data)
+                archive.closeEntry()
+            }
+        }
+        val entry = ZipLayout.read(apk).single { it.name.endsWith(".so") }
+        val symbols = directory.resolve("symbols").also(Files::createDirectories)
+        val binary = symbols.resolve("libnative.so").also { Files.write(it, elf()) }
+        val tool =
+            directory.resolve("llvm-symbolizer").also {
+                Files.writeString(
+                    it,
+                    """
+                    #!/bin/sh
+                    while read address; do
+                        [ "${'$'}address" = "0x1" ] || exit 1
+                        echo '{"Symbol":[{"FunctionName":"apk_function"}]}'
+                    done
+                    """.trimIndent(),
+                )
+                assertTrue(it.toFile().setExecutable(true))
+            }
+        Json.write(directory.resolve("artifacts.json"), mapOf("/data/app/base.apk" to "base.apk"))
+
+        fun render(): List<String> {
+            val run =
+                mutableMapOf<String, Any?>(
+                    "provenance" to mapOf("llvm_symbolizer" to tool.toString()),
+                    "events" to
+                        listOf(
+                            mapOf(
+                                "stack" to
+                                    listOf(
+                                        mapOf(
+                                            "file" to "/data/app/base.apk",
+                                            "fileOffset" to (entry.dataOffset + 1).toString(),
+                                            "label" to "unresolved",
+                                        ),
+                                        mapOf(
+                                            "file" to "/data/app/base.apk",
+                                            "fileOffset" to (entry.dataOffset - 1).toString(),
+                                            "label" to "unresolved",
+                                        ),
+                                        mapOf(
+                                            "file" to "/data/app/base.apk!lib/x86_64/libnative.so",
+                                            "ip" to "0x1",
+                                            "label" to "unresolved",
+                                        ),
+                                    ),
+                            ),
+                        ),
+                )
+            AndroidReportAttribution.apply(directory, run, AndroidReportAttribution.Options(symbols = symbols))
+            val event = (run["events"] as List<*>).single() as Map<*, *>
+            return (event["stack"] as List<*>).map { (it as Map<*, *>)["label"].toString() }
+        }
+        assertEquals(listOf("apk_function", "unresolved", "apk_function"), render())
+        Files.write(binary, elf(id = 9))
+        assertEquals(listOf("unresolved", "unresolved", "unresolved"), render())
+    }
+
     @Test fun `mapping without exact APK build binding is rejected`() {
         val mapping = directory.resolve("mapping.txt").also { Files.writeString(it, "Original -> a:\n") }
         val run = mutableMapOf<String, Any?>("provenance" to emptyMap<String, Any?>(), "events" to emptyList<Any>())
