@@ -23,6 +23,6 @@ android {
 }
 
 dependencies {
-    implementation("androidx.benchmark:benchmark-macro-junit4:1.4.1")
+    implementation("androidx.benchmark:benchmark-macro-junit4:1.5.0")
     implementation("androidx.test.ext:junit:1.3.0")
 }
